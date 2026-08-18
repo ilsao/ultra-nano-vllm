@@ -14,6 +14,7 @@ requires-python = ">=3.10,<3.13"
 dependencies = [
     "flash-attn>=2.8.3,<2.9",
     "numpy",
+    "rich",
     "safetensors",
     "torch>=2.4.0,<2.9",
     "triton>=3.0.0,<3.5",
@@ -27,4 +28,4 @@ Homepage="https://github.com/GeeeekExplorer/nano-vllm"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["nanovllm*"]
+include = ["benchmarks*", "nanovllm*"]
