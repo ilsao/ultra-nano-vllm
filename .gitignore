@@ -1,5 +1,5 @@
 # Benchmark report
-report/
+benchmarks/report/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

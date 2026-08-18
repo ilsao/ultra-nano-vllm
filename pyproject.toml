@@ -28,4 +28,4 @@ Homepage="https://github.com/GeeeekExplorer/nano-vllm"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["nanovllm*"]
+include = ["benchmarks*", "nanovllm*"]

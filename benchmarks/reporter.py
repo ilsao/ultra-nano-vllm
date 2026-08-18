@@ -21,13 +21,13 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from metrics import BenchmarkResult, MetricSummary
+from .metrics import BenchmarkResult, MetricSummary
 
 if TYPE_CHECKING:
-    from runner import BenchmarkConfiguration
+    from .runner import BenchmarkConfiguration
 
 
-REPORT_DIR = Path(__file__).resolve().parent.parent / "report"
+REPORT_DIR = Path(__file__).resolve().parent / "report"
 
 
 class BenchmarkReporter:

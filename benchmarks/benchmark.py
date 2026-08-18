@@ -1,11 +1,15 @@
 import argparse
 import os
+from pathlib import Path
 import re
+import sys
 
-import metrics
-import workloads
-from repoter import BenchmarkReporter
-from runner import BenchmarkRunner
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from benchmarks import metrics, workloads
+from benchmarks.reporter import BenchmarkReporter
+from benchmarks.runner import BenchmarkRunner
 
 
 DEFAULT_MODEL_PATH = "~/huggingface/Qwen3-0.6B/"

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from statistics import median
 
-from runner import BatchRunResult
+from .runner import BatchRunResult
 
 
 @dataclass

@@ -4,7 +4,8 @@ from time import perf_counter
 
 import torch
 from nanovllm import LLM
-from workloads import BenchmarkRequest
+
+from .workloads import BenchmarkRequest
 
 
 _MIB = 1024 ** 2

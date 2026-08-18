@@ -2,6 +2,8 @@ from io import StringIO
 import json
 from pathlib import Path
 import random
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -10,14 +12,30 @@ from unittest.mock import MagicMock, Mock, call, patch
 from nanovllm import SamplingParams
 from rich.console import Console
 
-import benchmark as benchmark_cli
-import metrics
-import repoter
-import workloads
-from runner import BatchRunResult, BenchmarkConfiguration, BenchmarkRunner
+from benchmarks import benchmark as benchmark_cli
+from benchmarks import metrics, reporter, workloads
+from benchmarks.runner import (
+    BatchRunResult,
+    BenchmarkConfiguration,
+    BenchmarkRunner,
+)
 
 
 class BenchmarkCliArgumentTests(unittest.TestCase):
+    def test_supports_direct_script_invocation_from_repo_root(self):
+        repo_root = Path(__file__).resolve().parent.parent
+
+        completed = subprocess.run(
+            [sys.executable, "benchmarks/benchmark.py", "--help"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("Benchmark offline LLM throughput.", completed.stdout)
+
     def test_serving_system_name_defaults_to_nano_vllm(self):
         with patch("sys.argv", ["benchmark.py"]):
             args = benchmark_cli.parse_args()
@@ -125,8 +143,11 @@ class BenchmarkRunnerTests(unittest.TestCase):
         fake_llm.model_runner.config = config
 
         with (
-            patch("runner.LLM", return_value=fake_llm),
-            patch("runner.torch.cuda.get_device_name", return_value="NVIDIA RTX 3080"),
+            patch("benchmarks.runner.LLM", return_value=fake_llm),
+            patch(
+                "benchmarks.runner.torch.cuda.get_device_name",
+                return_value="NVIDIA RTX 3080",
+            ),
         ):
             runner = BenchmarkRunner(
                 model_path="/models/Qwen3-0.6B/",
@@ -162,11 +183,19 @@ class BenchmarkRunnerTests(unittest.TestCase):
         runner.llm = fake_llm
 
         with (
-            patch("runner.perf_counter", side_effect=[10.0, 12.0]),
-            patch("runner.torch.cuda.synchronize") as synchronize,
-            patch("runner.torch.cuda.reset_peak_memory_stats") as reset_peak,
-            patch("runner.torch.cuda.max_memory_allocated", return_value=4 * 1024**2),
-            patch("runner.torch.cuda.max_memory_reserved", return_value=6 * 1024**2),
+            patch("benchmarks.runner.perf_counter", side_effect=[10.0, 12.0]),
+            patch("benchmarks.runner.torch.cuda.synchronize") as synchronize,
+            patch(
+                "benchmarks.runner.torch.cuda.reset_peak_memory_stats"
+            ) as reset_peak,
+            patch(
+                "benchmarks.runner.torch.cuda.max_memory_allocated",
+                return_value=4 * 1024**2,
+            ),
+            patch(
+                "benchmarks.runner.torch.cuda.max_memory_reserved",
+                return_value=6 * 1024**2,
+            ),
         ):
             result = runner.run_benchmark(requests)
 
@@ -215,6 +244,12 @@ class MetricsTests(unittest.TestCase):
 
 
 class ReporterTests(unittest.TestCase):
+    def test_default_report_dir_is_under_benchmarks(self):
+        self.assertEqual(
+            reporter.REPORT_DIR,
+            Path(reporter.__file__).resolve().parent / "report",
+        )
+
     def test_renders_grouped_plain_text_without_ansi_codes(self):
         configuration = BenchmarkConfiguration(
             model="Qwen3-0.6B",
@@ -248,7 +283,7 @@ class ReporterTests(unittest.TestCase):
             width=110,
         )
 
-        repoter.BenchmarkReporter(console=console).show_result(result, configuration)
+        reporter.BenchmarkReporter(console=console).show_result(result, configuration)
         rendered = output.getvalue()
 
         self.assertIn("Configuration", rendered)
@@ -278,9 +313,12 @@ class ReporterTests(unittest.TestCase):
         active_progress.add_task.return_value = 9
         progress.__enter__.return_value = active_progress
 
-        with patch("repoter.Progress", return_value=progress) as progress_type:
+        with patch(
+            "benchmarks.reporter.Progress",
+            return_value=progress,
+        ) as progress_type:
             run_indexes = list(
-                repoter.BenchmarkReporter(console=console).track_repeats(3)
+                reporter.BenchmarkReporter(console=console).track_repeats(3)
             )
 
         self.assertEqual(run_indexes, [0, 1, 2])
@@ -322,10 +360,13 @@ class ReporterTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             report_dir = Path(temp_dir) / "report"
             with (
-                patch("repoter.REPORT_DIR", report_dir),
-                patch("repoter._report_timestamp", return_value="2026-08-18-203045"),
+                patch("benchmarks.reporter.REPORT_DIR", report_dir),
+                patch(
+                    "benchmarks.reporter._report_timestamp",
+                    return_value="2026-08-18-203045",
+                ),
             ):
-                report_path = repoter.BenchmarkReporter(console=console).save_result(
+                report_path = reporter.BenchmarkReporter(console=console).save_result(
                     result,
                     configuration,
                     "custom-vllm",
@@ -369,11 +410,14 @@ class BenchmarkCliTests(unittest.TestCase):
         aggregate = Mock()
 
         with (
-            patch("benchmark.parse_args", return_value=args),
-            patch("benchmark.BenchmarkReporter", return_value=reporter),
-            patch("benchmark.BenchmarkRunner", return_value=runner),
-            patch("benchmark.make_workload", return_value=["request"]),
-            patch("benchmark.metrics.compute_benchmark_result", return_value=aggregate),
+            patch("benchmarks.benchmark.parse_args", return_value=args),
+            patch("benchmarks.benchmark.BenchmarkReporter", return_value=reporter),
+            patch("benchmarks.benchmark.BenchmarkRunner", return_value=runner),
+            patch("benchmarks.benchmark.make_workload", return_value=["request"]),
+            patch(
+                "benchmarks.benchmark.metrics.compute_benchmark_result",
+                return_value=aggregate,
+            ),
         ):
             benchmark_cli.main()
 
