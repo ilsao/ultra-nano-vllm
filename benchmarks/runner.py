@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from time import perf_counter
 
 import torch
-from nanovllm import LLM
+from nanovllm import EngineComponent, LLM
 
 from .workloads import BenchmarkRequest
 
@@ -36,11 +36,18 @@ class BatchRunResult:
 
 
 class BenchmarkRunner:
-    def __init__(self, model_path: str, enforce_eager: bool = False, max_model_len: int = 4096):
+    def __init__(
+        self,
+        model_path: str,
+        enforce_eager: bool = False,
+        max_model_len: int = 4096,
+        engine_component: EngineComponent | None = None,
+    ):
         self.llm = LLM(
             model_path,
             enforce_eager=enforce_eager,
             max_model_len=max_model_len,
+            engine_component=engine_component,
         )
         config = self.llm.model_runner.config
         hf_config = config.hf_config

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, call, patch
 
-from nanovllm import SamplingParams
+from nanovllm import EngineComponent, SamplingParams
 from nanovllm.engine.llm_engine import LLMEngine
 from rich.console import Console
 
@@ -150,8 +150,9 @@ class BenchmarkRunnerTests(unittest.TestCase):
         fake_llm = Mock()
         fake_llm.model_runner.config = config
 
+        components = EngineComponent()
         with (
-            patch("benchmarks.runner.LLM", return_value=fake_llm),
+            patch("benchmarks.runner.LLM", return_value=fake_llm) as llm,
             patch(
                 "benchmarks.runner.torch.cuda.get_device_name",
                 return_value="NVIDIA RTX 3080",
@@ -160,7 +161,15 @@ class BenchmarkRunnerTests(unittest.TestCase):
             runner = BenchmarkRunner(
                 model_path="/models/Qwen3-0.6B/",
                 enforce_eager=False,
+                engine_component=components,
             )
+
+        llm.assert_called_once_with(
+            "/models/Qwen3-0.6B/",
+            enforce_eager=False,
+            max_model_len=4096,
+            engine_component=components,
+        )
 
         self.assertEqual(
             runner.configuration,
@@ -502,7 +511,10 @@ class BenchmarkCliTests(unittest.TestCase):
         aggregate = Mock()
 
         with (
-            patch("benchmarks.benchmark.BenchmarkRunner", return_value=runner),
+            patch(
+                "benchmarks.benchmark.BenchmarkRunner",
+                return_value=runner,
+            ) as runner_type,
             patch("benchmarks.benchmark.make_workload", return_value=["request"]),
             patch(
                 "benchmarks.benchmark.metrics.compute_benchmark_result",
@@ -510,6 +522,12 @@ class BenchmarkCliTests(unittest.TestCase):
             ),
         ):
             result, configuration = benchmark_cli.execute_benchmark(config, reporter)
+
+        runner_type.assert_called_once_with(
+            model_path=str(Path("~/model").expanduser()),
+            enforce_eager=False,
+            engine_component=config.engine_component,
+        )
 
         self.assertEqual(runner.run_benchmark.call_count, 3)
         reporter.warmup.assert_called_once_with()

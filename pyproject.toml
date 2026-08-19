@@ -34,3 +34,10 @@ include = ["benchmarks*", "experiments*", "nanovllm*", "utils*"]
 
 [tool.setuptools.package-data]
 experiments = ["configs/*.yaml"]
+nanovllm = [
+    "engine/scheduler/*.py",
+    "engine/block_manager/*.py",
+    "layers/attention/*.py",
+    "layers/sampler/*.py",
+    "kernels/store_kvcache/*.py",
+]

@@ -83,6 +83,19 @@ Keep experiment responsibilities separated:
   and 2D plotting APIs.
 - `experiments/runner.py` owns isolated benchmark process execution.
 
+Engine implementations are selected by file name through
+`nanovllm.engine.component.EngineComponent`. Keep the entrypoints engine
+agnostic: benchmark and experiment code may transport this value but must not
+branch on component roles or import concrete implementations.
+
+The replaceable roles and their implementation directories are Scheduler,
+BlockManager, Attention, Sampler, and the store-KV-cache kernel. Component files
+must export `create_component(...)`; kernel files must export `create_kernel()`.
+Return values must satisfy the corresponding Protocol. Add new implementations
+inside the existing role directory and preserve the baseline package re-exports.
+Selectors are trusted local file stems and may contain hyphens; never broaden
+the loader to arbitrary paths or automatic repository-wide discovery.
+
 Multiprocessing uses the `spawn` context. Any process target must remain an
 importable module-level function; do not replace it with a nested function,
 lambda, or non-picklable callable.
@@ -99,6 +112,7 @@ Unless a task explicitly changes an interface, preserve:
 
 - The standalone benchmark and experiment CLI syntax.
 - The experiment YAML schema and deterministic Cartesian-product ordering.
+- Default baseline component selections and selector ordering.
 - The JSON report structure, including typed benchmark configuration, result,
   and `experiment_config` data required by plot-only mode.
 - Independent plotting groups for each YAML file and support for zero, one, or

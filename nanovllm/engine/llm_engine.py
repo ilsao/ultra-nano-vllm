@@ -6,15 +6,20 @@ from transformers import AutoTokenizer
 import torch.multiprocessing as mp
 
 from nanovllm.config import Config
+from nanovllm.engine.component import EngineComponent
 from nanovllm.sampling_params import SamplingParams
 from nanovllm.engine.sequence import Sequence
-from nanovllm.engine.scheduler import Scheduler
 from nanovllm.engine.model_runner import ModelRunner
 
 
 class LLMEngine:
 
-    def __init__(self, model, **kwargs):
+    def __init__(
+        self,
+        model,
+        engine_component: EngineComponent | None = None,
+        **kwargs,
+    ):
         """
         Initialize the LLMEngine with the specified model and configuration parameters.
         If tensor_parallel_size is greater than 1, it will spawn multiple processes 
@@ -32,6 +37,7 @@ class LLMEngine:
         config_fields = {field.name for field in fields(Config)}
         # Filter kwargs to only include those that are valid for Config
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
+        config_kwargs["engine_component"] = engine_component or EngineComponent()
         # Create a Config instance from the filtered parameters
         config = Config(model, **config_kwargs)
         Sequence.block_size = config.kvcache_block_size
@@ -55,7 +61,7 @@ class LLMEngine:
         # The worker threads only work for tensor parallelism
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
-        self.scheduler = Scheduler(config)
+        self.scheduler = config.engine_component.create_scheduler(config)
         atexit.register(self.exit)
 
     def exit(self):

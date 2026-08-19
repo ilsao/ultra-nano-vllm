@@ -3,19 +3,12 @@ from torch import nn
 
 
 class Sampler(nn.Module):
-
     @torch.compile
-    def forward(self, logits: torch.Tensor, temperatures: torch.Tensor) -> torch.Tensor:
-        """ 
-        Samples tokens, using greedy decoding where temperature is zero.
-        
-        param:
-            logits (torch.Tensor): The logits from which to sample tokens.
-            temperatures (torch.Tensor): The temperature values for sampling.
-            
-        return:
-            torch.Tensor: The sampled token indices.
-        """
+    def forward(
+        self,
+        logits: torch.Tensor,
+        temperatures: torch.Tensor,
+    ) -> torch.Tensor:
         greedy = temperatures == 0
         safe_temperatures = torch.where(
             greedy,
@@ -29,3 +22,7 @@ class Sampler(nn.Module):
         ).argmax(dim=-1)
         greedy_tokens = logits.argmax(dim=-1)
         return torch.where(greedy, greedy_tokens, sample_tokens)
+
+
+def create_component() -> Sampler:
+    return Sampler()

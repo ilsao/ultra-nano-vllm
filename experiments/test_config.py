@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from benchmarks.benchmark import BenchmarkConfig
 from experiments.config import (
@@ -164,6 +165,23 @@ class ConfigGroupTests(unittest.TestCase):
 
         self.assertEqual([group.name for group in groups], ["same-1", "same-2"])
 
+    def test_resolves_component_sweep_as_categorical_dimension(self):
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "components.yaml"
+            path.write_text(
+                "scheduler: [scheduler, optimized-scheduler-v1]\n"
+                "experiment_name: [baseline, optimized]\n",
+                encoding="utf-8",
+            )
+            with patch("nanovllm.engine.component._load_factory"):
+                groups = resolve_config_groups([path])
+
+        self.assertEqual(groups[0].dimensions, ("scheduler",))
+        self.assertEqual(
+            [config.engine_component.scheduler for config in groups[0].configs],
+            ["scheduler", "optimized-scheduler-v1"],
+        )
+
     def test_rejects_invalid_group_names_overrides_and_dimensions(self):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -220,6 +238,11 @@ class ConfigGroupTests(unittest.TestCase):
                 "temperature",
                 "repeats",
                 "enforce_eager",
+                "scheduler",
+                "block_manager",
+                "attention",
+                "sampler",
+                "store_kvcache",
             ),
         )
         self.assertEqual(

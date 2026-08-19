@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from benchmarks.benchmark import BenchmarkConfig
 from benchmarks.metrics import BenchmarkResult, MetricSummary
@@ -16,6 +17,7 @@ from experiments.plot import (
     plot_2d,
     validate_grid,
 )
+from nanovllm import EngineComponent
 
 
 def make_result(value: float) -> BenchmarkResult:
@@ -60,6 +62,24 @@ class PlotTests(unittest.TestCase):
         self.assertEqual(
             validate_grid(records), ("num_requests", "enforce_eager")
         )
+
+    def test_infers_component_selector_as_categorical_dimension(self):
+        with patch("nanovllm.engine.component._load_factory"):
+            records = [
+                PlotRecord(
+                    BenchmarkConfig(
+                        engine_component=EngineComponent(scheduler=selector),
+                        experiment_name=f"run-{index}",
+                    ),
+                    make_result(float(index + 1)),
+                )
+                for index, selector in enumerate(
+                    ("scheduler", "optimized-scheduler-v1")
+                )
+            ]
+
+        self.assertEqual(infer_dimensions(records), ("scheduler",))
+        self.assertEqual(validate_grid(records), ("scheduler",))
 
     def test_plot_1d_saves_six_metric_files(self):
         records = [
@@ -149,6 +169,20 @@ class PlotTests(unittest.TestCase):
             )
             records = load_reports([valid])
             self.assertEqual(records, [PlotRecord(config, result)])
+
+            old = Path(temp_dir) / "old.json"
+            old_config = asdict(config)
+            old_config.pop("engine_component")
+            old.write_text(
+                json.dumps(
+                    {
+                        "experiment_config": old_config,
+                        "result": asdict(result),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(load_reports([old]), [PlotRecord(config, result)])
 
             invalid = Path(temp_dir) / "invalid.json"
             invalid.write_text('{"result": {}}', encoding="utf-8")
