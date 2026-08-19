@@ -28,7 +28,7 @@ class BenchmarkConfig:
     num_requests: int = 256
     input_len: int = 1024
     output_len: int = 1024
-    max_model_len: int = 4096
+    max_model_len: int = 8192
     seed: int = 0
     temperature: float = 0.6
     repeats: int = 3
