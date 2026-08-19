@@ -1,5 +1,5 @@
 import argparse
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 import os
 from pathlib import Path
 import sys
@@ -15,6 +15,7 @@ from experiments.config import (
     validate_experiment_name,
     validate_field_value,
 )
+from nanovllm import EngineComponent
 from utils.reporter import Reporter
 
 
@@ -30,10 +31,15 @@ class BenchmarkConfig:
     temperature: float = 0.6
     repeats: int = 3
     enforce_eager: bool = False
+    engine_component: EngineComponent = field(default_factory=EngineComponent)
     experiment_name: str = DEFAULT_EXPERIMENT_NAME
 
     def __post_init__(self) -> None:
         for field in fields(self):
+            if field.name == "engine_component":
+                if not isinstance(self.engine_component, EngineComponent):
+                    raise TypeError("engine_component must be EngineComponent")
+                continue
             validate_field_value(field.name, getattr(self, field.name))
 
 
@@ -148,6 +154,7 @@ def execute_benchmark(
     runner = BenchmarkRunner(
         model_path=os.path.expanduser(config.model),
         enforce_eager=config.enforce_eager,
+        engine_component=config.engine_component,
     )
     try:
         with reporter.warmup():

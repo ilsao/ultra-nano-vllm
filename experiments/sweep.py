@@ -5,13 +5,18 @@ from itertools import product
 
 from benchmarks.benchmark import BenchmarkConfig
 from experiments.config import Config
+from nanovllm.engine.component import EngineComponent
 
 
 def expand_config(config: Config) -> list[BenchmarkConfig]:
     """Expand one normalized YAML specification in deterministic field order."""
-    sweep_fields = [
-        field for field in fields(BenchmarkConfig) if field.name != "experiment_name"
+    benchmark_fields = [
+        field
+        for field in fields(BenchmarkConfig)
+        if field.name not in {"engine_component", "experiment_name"}
     ]
+    component_fields = list(fields(EngineComponent))
+    sweep_fields = benchmark_fields + component_fields
     combinations = list(
         product(*(getattr(config, field.name) for field in sweep_fields))
     )
@@ -22,10 +27,15 @@ def expand_config(config: Config) -> list[BenchmarkConfig]:
             f"{len(config.experiment_name)})"
         )
 
-    field_names = [field.name for field in sweep_fields]
+    benchmark_names = [field.name for field in benchmark_fields]
+    component_names = [field.name for field in component_fields]
+    benchmark_count = len(benchmark_names)
     return [
         BenchmarkConfig(
-            **dict(zip(field_names, values)),
+            **dict(zip(benchmark_names, values[:benchmark_count])),
+            engine_component=EngineComponent(
+                **dict(zip(component_names, values[benchmark_count:]))
+            ),
             experiment_name=experiment_name,
         )
         for values, experiment_name in zip(combinations, config.experiment_name)

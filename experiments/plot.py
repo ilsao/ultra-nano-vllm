@@ -22,7 +22,8 @@ import numpy as np
 
 from benchmarks.benchmark import BenchmarkConfig
 from benchmarks.metrics import BenchmarkResult, MetricSummary
-from experiments.config import CONFIG_DIMENSIONS
+from experiments.config import CONFIG_DIMENSIONS, config_dimension_value
+from nanovllm.engine.component import EngineComponent
 
 
 REPORT_DIR = Path(__file__).resolve().parent / "report"
@@ -154,7 +155,17 @@ def load_reports(paths: Sequence[str | Path]) -> list[PlotRecord]:
             raw_result = report["result"]
             if not isinstance(raw_config, dict) or not isinstance(raw_result, dict):
                 raise TypeError("experiment_config and result must be objects")
-            config = BenchmarkConfig(**raw_config)
+            decoded_config = dict(raw_config)
+            raw_components = decoded_config.get("engine_component")
+            if raw_components is None:
+                decoded_config["engine_component"] = EngineComponent()
+            elif isinstance(raw_components, dict):
+                decoded_config["engine_component"] = EngineComponent(
+                    **raw_components
+                )
+            else:
+                raise TypeError("experiment_config.engine_component must be an object")
+            config = BenchmarkConfig(**decoded_config)
             result = _decode_result(raw_result)
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"could not load experiment report {path}: {exc}") from exc
@@ -332,7 +343,7 @@ def _validate_dimensions(dimensions: Sequence[str]) -> None:
 
 
 def _dimension_value(record: PlotRecord, dimension: str):
-    return getattr(record.config, dimension)
+    return config_dimension_value(record.config, dimension)
 
 
 def _ordered_values(records: Sequence[PlotRecord], dimension: str) -> list[object]:

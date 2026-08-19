@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from experiments.config import Config
 from experiments import sweep
@@ -32,6 +33,29 @@ class SweepTests(unittest.TestCase):
             sweep.expand_config(
                 Config(num_requests=(1, 2), experiment_name=("only-one",))
             )
+
+    def test_expands_component_selectors_after_scalar_fields(self):
+        with patch("experiments.config.validate_engine_component_selector"):
+            config = Config(
+                num_requests=(1, 2),
+                scheduler=("scheduler", "optimized-scheduler-v1"),
+                experiment_name=("a", "b", "c", "d"),
+            )
+
+            expanded = sweep.expand_config(config)
+
+        self.assertEqual(
+            [
+                (run.num_requests, run.engine_component.scheduler)
+                for run in expanded
+            ],
+            [
+                (1, "scheduler"),
+                (1, "optimized-scheduler-v1"),
+                (2, "scheduler"),
+                (2, "optimized-scheduler-v1"),
+            ],
+        )
 
     def test_has_no_cli_or_benchmark_execution_responsibilities(self):
         self.assertFalse(hasattr(sweep, "parse_args"))

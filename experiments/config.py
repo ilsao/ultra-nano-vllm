@@ -9,6 +9,12 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from nanovllm.engine.component import (
+    ENGINE_COMPONENT_DIMENSIONS,
+    EngineComponent,
+    validate_engine_component_selector,
+)
+
 if TYPE_CHECKING:
     from benchmarks.benchmark import BenchmarkConfig
 
@@ -29,6 +35,11 @@ class Config:
     temperature: tuple[float, ...] = (0.6,)
     repeats: tuple[int, ...] = (3,)
     enforce_eager: tuple[bool, ...] = (False,)
+    scheduler: tuple[str, ...] = ("scheduler",)
+    block_manager: tuple[str, ...] = ("block_manager",)
+    attention: tuple[str, ...] = ("attention",)
+    sampler: tuple[str, ...] = ("sampler",)
+    store_kvcache: tuple[str, ...] = ("store_kvcache",)
     experiment_name: tuple[str, ...] = (DEFAULT_EXPERIMENT_NAME,)
 
     def __post_init__(self) -> None:
@@ -98,6 +109,11 @@ _FIELD_TYPES: dict[str, type] = {
     "temperature": float,
     "repeats": int,
     "enforce_eager": bool,
+    "scheduler": str,
+    "block_manager": str,
+    "attention": str,
+    "sampler": str,
+    "store_kvcache": str,
     "experiment_name": str,
 }
 
@@ -160,7 +176,8 @@ def infer_config_dimensions(
     return tuple(
         dimension
         for dimension in CONFIG_DIMENSIONS
-        if len({getattr(config, dimension) for config in configs}) > 1
+        if len({config_dimension_value(config, dimension) for config in configs})
+        > 1
     )
 
 
@@ -175,7 +192,7 @@ def validate_config_grid(
             + ", ".join(dimensions)
         )
     coordinates = [
-        tuple(getattr(config, dimension) for dimension in dimensions)
+        tuple(config_dimension_value(config, dimension) for dimension in dimensions)
         for config in configs
     ]
     if len(set(coordinates)) != len(coordinates):
@@ -184,13 +201,22 @@ def validate_config_grid(
         )
     expected = 1
     for dimension in dimensions:
-        expected *= len({getattr(config, dimension) for config in configs})
+        expected *= len(
+            {config_dimension_value(config, dimension) for config in configs}
+        )
     if len(configs) != expected:
         raise ValueError(
             "experiment configurations do not form a complete parameter grid "
             f"(expected {expected}, got {len(configs)})"
         )
     return dimensions
+
+
+def config_dimension_value(config: BenchmarkConfig, dimension: str) -> object:
+    """Return a scalar or nested engine-component dimension value."""
+    if dimension in ENGINE_COMPONENT_DIMENSIONS:
+        return getattr(config.engine_component, dimension)
+    return getattr(config, dimension)
 
 
 def validate_experiment_name(value: str) -> str:
@@ -246,6 +272,8 @@ def validate_field_value(field_name: str, value: Any) -> None:
         raise ValueError("temperature must be zero or greater than 1e-10")
     elif field_name == "experiment_name":
         validate_experiment_name(value)
+    elif field_name in ENGINE_COMPONENT_DIMENSIONS:
+        validate_engine_component_selector(field_name, value)
 
 
 def _require_type(field_name: str, value: Any, expected_type: type) -> None:

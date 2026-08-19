@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from benchmarks.benchmark import BenchmarkConfig
 from experiments.config import (
@@ -10,6 +11,7 @@ from experiments.config import (
     resolve_config_groups,
     validate_config_grid,
 )
+from nanovllm import EngineComponent
 
 
 class ConfigTests(unittest.TestCase):
@@ -68,14 +70,56 @@ class ConfigTests(unittest.TestCase):
             ("one-ten", "one-twenty", "two-ten", "two-twenty"),
         )
 
-    def test_all_repository_configs_are_valid(self):
+    def test_all_repository_configs_resolve_to_baseline_experiments(self):
         config_dir = Path(__file__).resolve().parent / "configs"
-        loaded = {
-            path.name: Config.from_yaml(path)
-            for path in sorted(config_dir.glob("*.yaml"))
+        paths = sorted(config_dir.glob("*.yaml"))
+        groups = resolve_config_groups(paths)
+        expected = {
+            "baseline-eager-comparison": (
+                ("enforce_eager",),
+                ("baseline-cuda-graph", "baseline-eager"),
+            ),
+            "baseline-input-sweeps": (
+                ("input_len",),
+                tuple(
+                    f"baseline-input-{value}"
+                    for value in (256, 512, 1024, 2048, 4096)
+                ),
+            ),
+            "baseline-output-sweeps": (
+                ("output_len",),
+                tuple(
+                    f"baseline-output-{value}"
+                    for value in (256, 512, 1024, 2048, 4096)
+                ),
+            ),
+            "baseline-req-sweeps": (
+                ("num_requests",),
+                tuple(
+                    f"baseline-req-{value}"
+                    for value in (32, 64, 128, 256, 512)
+                ),
+            ),
         }
 
-        self.assertTrue(loaded, "expected at least one repository experiment config")
+        self.assertEqual(
+            {
+                group.name: (
+                    group.dimensions,
+                    tuple(config.experiment_name for config in group.configs),
+                )
+                for group in groups
+            },
+            expected,
+        )
+        configs = [config for group in groups for config in group.configs]
+        self.assertTrue(configs, "expected at least one repository experiment config")
+        self.assertTrue(all(config.temperature == 0.0 for config in configs))
+        self.assertTrue(
+            all(config.engine_component == EngineComponent() for config in configs)
+        )
+        names = [config.experiment_name for config in configs]
+        self.assertEqual(len(names), len(set(names)))
 
     def test_rejects_invalid_document_shapes_and_fields(self):
         cases = {
@@ -164,6 +208,23 @@ class ConfigGroupTests(unittest.TestCase):
 
         self.assertEqual([group.name for group in groups], ["same-1", "same-2"])
 
+    def test_resolves_component_sweep_as_categorical_dimension(self):
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "components.yaml"
+            path.write_text(
+                "scheduler: [scheduler, optimized-scheduler-v1]\n"
+                "experiment_name: [baseline, optimized]\n",
+                encoding="utf-8",
+            )
+            with patch("experiments.config.validate_engine_component_selector"):
+                groups = resolve_config_groups([path])
+
+        self.assertEqual(groups[0].dimensions, ("scheduler",))
+        self.assertEqual(
+            [config.engine_component.scheduler for config in groups[0].configs],
+            ["scheduler", "optimized-scheduler-v1"],
+        )
+
     def test_rejects_invalid_group_names_overrides_and_dimensions(self):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -220,6 +281,11 @@ class ConfigGroupTests(unittest.TestCase):
                 "temperature",
                 "repeats",
                 "enforce_eager",
+                "scheduler",
+                "block_manager",
+                "attention",
+                "sampler",
+                "store_kvcache",
             ),
         )
         self.assertEqual(
