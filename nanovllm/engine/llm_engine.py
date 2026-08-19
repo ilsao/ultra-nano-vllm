@@ -182,6 +182,9 @@ class LLMEngine:
         if not isinstance(sampling_params, list):
             sampling_params = [sampling_params] * len(prompts)
 
+        assert len(prompts) == len(sampling_params), \
+            "The number of prompts must match the number of sampling parameters."
+
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
         outputs = {}
