@@ -64,7 +64,7 @@ class PlotTests(unittest.TestCase):
         )
 
     def test_infers_component_selector_as_categorical_dimension(self):
-        with patch("nanovllm.engine.component._load_factory"):
+        with patch("nanovllm.engine.component._load_factory") as load_factory:
             records = [
                 PlotRecord(
                     BenchmarkConfig(
@@ -77,6 +77,7 @@ class PlotTests(unittest.TestCase):
                     ("scheduler", "optimized-scheduler-v1")
                 )
             ]
+            load_factory.assert_not_called()
 
         self.assertEqual(infer_dimensions(records), ("scheduler",))
         self.assertEqual(validate_grid(records), ("scheduler",))

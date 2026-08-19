@@ -216,7 +216,7 @@ class ConfigGroupTests(unittest.TestCase):
                 "experiment_name: [baseline, optimized]\n",
                 encoding="utf-8",
             )
-            with patch("nanovllm.engine.component._load_factory"):
+            with patch("experiments.config.validate_engine_component_selector"):
                 groups = resolve_config_groups([path])
 
         self.assertEqual(groups[0].dimensions, ("scheduler",))

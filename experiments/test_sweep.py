@@ -35,7 +35,7 @@ class SweepTests(unittest.TestCase):
             )
 
     def test_expands_component_selectors_after_scalar_fields(self):
-        with patch("nanovllm.engine.component._load_factory"):
+        with patch("experiments.config.validate_engine_component_selector"):
             config = Config(
                 num_requests=(1, 2),
                 scheduler=("scheduler", "optimized-scheduler-v1"),

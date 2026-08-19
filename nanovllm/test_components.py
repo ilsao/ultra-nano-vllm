@@ -102,7 +102,7 @@ def create_component(**kwargs):
 
         self.assertEqual(type(scheduler).__name__, "CustomScheduler")
 
-    def test_rejects_unsafe_and_missing_selectors(self):
+    def test_constructor_validates_names_without_loading_implementations(self):
         for selector in ("../scheduler", "scheduler..backup"):
             with self.subTest(selector=selector), self.assertRaisesRegex(
                 ValueError,
@@ -111,8 +111,36 @@ def create_component(**kwargs):
                 EngineComponent(scheduler=selector)
         with self.assertRaisesRegex(ValueError, "without paths"):
             EngineComponent(scheduler=[])
+
+        with patch.object(component, "_load_factory") as load_factory:
+            selections = EngineComponent(scheduler="missing-scheduler")
+
+        self.assertEqual(selections.scheduler, "missing-scheduler")
+        load_factory.assert_not_called()
+
+    def test_config_validation_checks_file_without_importing_module(self):
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "broken.py"
+            path.write_text("raise RuntimeError('must not import')\n", encoding="utf-8")
+            registry = (Path(temp_dir), "unused.package", "create_component")
+            with (
+                patch.dict(component._IMPLEMENTATIONS, {"scheduler": registry}),
+                patch.object(component, "_load_factory_cached") as load_factory,
+            ):
+                self.assertEqual(
+                    component.validate_engine_component_selector(
+                        "scheduler",
+                        "broken",
+                    ),
+                    "broken",
+                )
+                load_factory.assert_not_called()
+
         with self.assertRaisesRegex(ValueError, "does not exist"):
-            EngineComponent(scheduler="missing-scheduler")
+            component.validate_engine_component_selector(
+                "scheduler",
+                "missing-scheduler",
+            )
 
     def test_reports_import_export_and_protocol_errors(self):
         cases = {
@@ -136,11 +164,6 @@ def create_component(**kwargs):
                 component._IMPLEMENTATIONS,
                 {"scheduler": registry},
             ):
-                with self.assertRaisesRegex(ValueError, "import exploded"):
-                    EngineComponent(scheduler="broken-import")
-                with self.assertRaisesRegex(ValueError, "create_component"):
-                    EngineComponent(scheduler="missing-factory")
-                selections = EngineComponent(scheduler="wrong-result")
                 config = SimpleNamespace(
                     num_kvcache_blocks=1,
                     kvcache_block_size=1,
@@ -148,6 +171,13 @@ def create_component(**kwargs):
                     max_num_batched_tokens=1,
                     eos=0,
                 )
+                selections = EngineComponent(scheduler="broken-import")
+                with self.assertRaisesRegex(ValueError, "import exploded"):
+                    selections.create_scheduler(config)
+                selections = EngineComponent(scheduler="missing-factory")
+                with self.assertRaisesRegex(ValueError, "create_component"):
+                    selections.create_scheduler(config)
+                selections = EngineComponent(scheduler="wrong-result")
                 with self.assertRaisesRegex(TypeError, "SchedulerProtocol"):
                     selections.create_scheduler(config)
 

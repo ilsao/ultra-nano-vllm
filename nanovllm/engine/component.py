@@ -61,14 +61,14 @@ class StoreKVCacheProtocol(Protocol):
 
 _ROOT = Path(__file__).resolve().parent.parent
 
-""" 
-Configuration rules:
-    "module_name" : (
-        _ROOT / "relative_path_to_module",
-        "full.package.name",
-        "factory_function_name",
-    )
-"""
+
+# Configuration rules:
+#     "module_name" : (
+#         _ROOT / "relative_path_to_module",
+#         "full.package.name",
+#         "factory_function_name",
+#     )
+    
 _IMPLEMENTATIONS = {
     "scheduler": (
         _ROOT / "engine" / "scheduler",
@@ -103,8 +103,8 @@ _SELECTOR_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 class EngineComponent:
     """
     File-name selectors for replaceable engine components and kernels.
-    
-    Responsible for loading the selected implementation and validating 
+
+    Responsible for loading the selected implementation and validating
     that it satisfies the required protocol.
     """
 
@@ -116,7 +116,7 @@ class EngineComponent:
 
     def __post_init__(self) -> None:
         for field in fields(self):
-            _load_factory(field.name, getattr(self, field.name))
+            _validate_selector(field.name, getattr(self, field.name))
 
     def create_block_manager(
         self,
@@ -179,7 +179,7 @@ ENGINE_COMPONENT_DIMENSIONS = tuple(field.name for field in fields(EngineCompone
 
 def validate_engine_component_selector(role: str, selector: str) -> str:
     """Validate one selector without constructing its implementation."""
-    _load_factory(role, selector)
+    _implementation_path(role, selector)
     return selector
 
 
@@ -206,16 +206,22 @@ def _create(
 
 
 def _load_factory(role: str, selector: str):
-    """ 
+    """
     Load the factory function for the specified role and selector.
-    
+
     Args:
         role: The role of the engine component (e.g., "scheduler", "block_manager", etc.).
         selector: The file name selector for the implementation.
-        
+
     Returns:
         A callable factory function that creates an instance of the specified engine component.
     """
+    _validate_selector(role, selector)
+    return _load_factory_cached(role, selector)
+
+
+def _validate_selector(role: str, selector: str) -> None:
+    """Validate a role and safe local file-name selector without I/O."""
     if role not in _IMPLEMENTATIONS:
         raise ValueError(f"unknown engine component role: {role}")
     if (
@@ -226,27 +232,34 @@ def _load_factory(role: str, selector: str):
         raise ValueError(
             f"invalid {role} selector {selector!r}; use a local file name without paths"
         )
-    return _load_factory_cached(role, selector)
 
 
-@lru_cache(maxsize=None)
-def _load_factory_cached(role: str, selector: str):
-    """ 
-    Load the factory function for the specified role and selector, with caching.
-    
-    Args:
-        role: The role of the engine component (e.g., "scheduler", "block_manager", etc.).
-        selector: The file name selector for the implementation.
-        
-    Returns:
-        A callable factory function that creates an instance of the specified engine component. 
-    """
-    directory, package, export_name = _IMPLEMENTATIONS[role]
+def _implementation_path(role: str, selector: str) -> Path:
+    """Return an existing implementation path without importing its module."""
+    _validate_selector(role, selector)
+    directory, _, _ = _IMPLEMENTATIONS[role]
     path = directory / f"{selector}.py"
     if not path.is_file():
         raise ValueError(
             f"{role} implementation {selector!r} does not exist at {path}"
         )
+    return path
+
+
+@lru_cache(maxsize=None)
+def _load_factory_cached(role: str, selector: str):
+    """
+    Load the factory function for the specified role and selector, with caching.
+
+    Args:
+        role: The role of the engine component (e.g., "scheduler", "block_manager", etc.).
+        selector: The file name selector for the implementation.
+
+    Returns:
+        A callable factory function that creates an instance of the specified engine component.
+    """
+    directory, package, export_name = _IMPLEMENTATIONS[role]
+    path = _implementation_path(role, selector)
 
     if selector.isidentifier():
         module_name = f"{package}.{selector}"
