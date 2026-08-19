@@ -4,11 +4,16 @@ input_len: [256, 512, 1024, 2048, 4096]
 output_len: 1024
 seed: 0
 temperature: 0.0
-repeats: 2
-
+repeats: 3
 enforce_eager: false
 
-experiment_name: 
+scheduler: scheduler
+block_manager: block_manager
+attention: attention
+sampler: sampler
+store_kvcache: store_kvcache
+
+experiment_name:
   - baseline-input-256
   - baseline-input-512
   - baseline-input-1024

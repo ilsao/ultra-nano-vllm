@@ -60,6 +60,15 @@ class StoreKVCacheProtocol(Protocol):
 
 
 _ROOT = Path(__file__).resolve().parent.parent
+
+""" 
+Configuration rules:
+    "module_name" : (
+        _ROOT / "relative_path_to_module",
+        "full.package.name",
+        "factory_function_name",
+    )
+"""
 _IMPLEMENTATIONS = {
     "scheduler": (
         _ROOT / "engine" / "scheduler",
@@ -92,7 +101,12 @@ _SELECTOR_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 @dataclass(frozen=True, slots=True)
 class EngineComponent:
-    """File-name selectors for replaceable engine components and kernels."""
+    """
+    File-name selectors for replaceable engine components and kernels.
+    
+    Responsible for loading the selected implementation and validating 
+    that it satisfies the required protocol.
+    """
 
     scheduler: str = "scheduler"
     block_manager: str = "block_manager"
@@ -192,6 +206,16 @@ def _create(
 
 
 def _load_factory(role: str, selector: str):
+    """ 
+    Load the factory function for the specified role and selector.
+    
+    Args:
+        role: The role of the engine component (e.g., "scheduler", "block_manager", etc.).
+        selector: The file name selector for the implementation.
+        
+    Returns:
+        A callable factory function that creates an instance of the specified engine component.
+    """
     if role not in _IMPLEMENTATIONS:
         raise ValueError(f"unknown engine component role: {role}")
     if (
@@ -207,6 +231,16 @@ def _load_factory(role: str, selector: str):
 
 @lru_cache(maxsize=None)
 def _load_factory_cached(role: str, selector: str):
+    """ 
+    Load the factory function for the specified role and selector, with caching.
+    
+    Args:
+        role: The role of the engine component (e.g., "scheduler", "block_manager", etc.).
+        selector: The file name selector for the implementation.
+        
+    Returns:
+        A callable factory function that creates an instance of the specified engine component. 
+    """
     directory, package, export_name = _IMPLEMENTATIONS[role]
     path = directory / f"{selector}.py"
     if not path.is_file():
