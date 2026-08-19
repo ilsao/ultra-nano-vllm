@@ -21,7 +21,7 @@ from nanovllm import EngineComponent
 
 
 def make_result(value: float) -> BenchmarkResult:
-    summary = MetricSummary(value, value - 0.25, value + 0.5)
+    summary = MetricSummary(value, value - 0.25, value + 0.5, value + 0.1, 0.2)
     return BenchmarkResult(
         repeats=3,
         num_requests=1,
@@ -29,9 +29,16 @@ def make_result(value: float) -> BenchmarkResult:
         output_tokens=summary,
         total_tokens=summary,
         elapsed_time=summary,
+        latency_p50=summary,
+        latency_p90=summary,
+        latency_p99=summary,
         request_throughput=summary,
         output_throughput=summary,
         total_throughput=summary,
+        prefill_throughput=summary,
+        decode_throughput=summary,
+        prefill_time=summary,
+        decode_time=summary,
         peak_kvcache_blocks=int(value + 10),
         peak_kvcache_utilization=(value + 10) / 100,
     )
@@ -82,7 +89,7 @@ class PlotTests(unittest.TestCase):
         self.assertEqual(infer_dimensions(records), ("scheduler",))
         self.assertEqual(validate_grid(records), ("scheduler",))
 
-    def test_plot_1d_saves_six_metric_files(self):
+    def test_plot_1d_saves_all_metric_files(self):
         records = [
             PlotRecord(
                 BenchmarkConfig(num_requests=value, experiment_name=f"run-{value}"),
@@ -97,7 +104,7 @@ class PlotTests(unittest.TestCase):
                 output_dir=temp_dir,
                 plot_name="one dimensional",
             )
-            self.assertEqual(len(paths), 6)
+            self.assertEqual(len(paths), 13)
             self.assertTrue(all(path.exists() for path in paths))
             self.assertTrue(all(path.suffix == ".png" for path in paths))
             self.assertTrue(all("1d-num_requests" in path.name for path in paths))
@@ -107,8 +114,13 @@ class PlotTests(unittest.TestCase):
             self.assertTrue(
                 any("peak-kvcache-utilization" in path.name for path in paths)
             )
+            self.assertTrue(any("latency-p99" in path.name for path in paths))
+            self.assertTrue(
+                any("prefill-throughput" in path.name for path in paths)
+            )
+            self.assertTrue(any("decode-time" in path.name for path in paths))
 
-    def test_plot_2d_supports_categorical_axes_and_saves_six_files(self):
+    def test_plot_2d_supports_categorical_axes_and_saves_all_files(self):
         records = []
         index = 0
         for model in ("model-a", "model-b"):
@@ -133,7 +145,7 @@ class PlotTests(unittest.TestCase):
                 output_dir=temp_dir,
                 plot_name="categorical",
             )
-            self.assertEqual(len(paths), 6)
+            self.assertEqual(len(paths), 13)
             self.assertTrue(all(path.exists() for path in paths))
             self.assertTrue(
                 all("2d-model-enforce_eager" in path.name for path in paths)
@@ -190,6 +202,24 @@ class PlotTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(load_reports([old]), [PlotRecord(config, result)])
+
+            missing_phase = Path(temp_dir) / "missing-phase.json"
+            incomplete_result = asdict(result)
+            incomplete_result.pop("latency_p99")
+            missing_phase.write_text(
+                json.dumps(
+                    {
+                        "experiment_config": asdict(config),
+                        "result": incomplete_result,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "missing latency/phase metrics.*rerun",
+            ):
+                load_reports([missing_phase])
 
             legacy = Path(temp_dir) / "legacy-memory.json"
             legacy_result = asdict(result)

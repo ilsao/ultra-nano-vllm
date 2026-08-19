@@ -117,9 +117,9 @@ Unless a task explicitly changes an interface, preserve:
   and `experiment_config` data required by plot-only mode.
 - Independent plotting groups for each YAML file and support for zero, one, or
   two varying parameters.
-- Six comparison plots per plotted group: elapsed time, request throughput,
-  output throughput, total throughput, peak KV-cache blocks, and peak KV-cache
-  utilization.
+- Thirteen comparison plots per plotted group: elapsed time, latency
+  p50/p90/p99, request/output/total/prefill/decode throughput, prefill/decode
+  time, peak KV-cache blocks, and peak KV-cache utilization.
 
 Validate all experiment groups before starting GPU work. Reject duplicate or
 incomplete parameter grids and configurations with more than two varying

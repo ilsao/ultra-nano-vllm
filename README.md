@@ -68,8 +68,8 @@ flowchart TD
     CALLER -->|experiment parent| EOUTPUT["Rich result + experiment JSON"]
     EOUTPUT --> DISPATCH{"Varying dimensions"}
     DISPATCH -->|0D| RESULT["Result only"]
-    DISPATCH -->|1D| LINE["6 line plots"]
-    DISPATCH -->|2D| HEATMAP["6 heatmaps"]
+    DISPATCH -->|1D| LINE["13 line plots"]
+    DISPATCH -->|2D| HEATMAP["13 heatmaps"]
     EOUTPUT --> EREPORT["experiments/report/"]
     RESULT --> EREPORT
     LINE --> EREPORT
@@ -168,8 +168,9 @@ sampling. Add `--enforce-eager` to disable CUDA graph execution.
 
 The benchmark prints a Rich result table and writes a JSON report under
 `benchmarks/report/`. Each report includes workload totals, median/minimum/
-maximum timing and throughput values, peak used KV-cache blocks, and peak
-KV-cache utilization.
+maximum/mean/standard-deviation summaries, request latency p50/p90/p99,
+prefill/decode time and throughput, peak used KV-cache blocks, and peak KV-cache
+utilization.
 
 <a id="experiments"></a>
 
@@ -236,13 +237,15 @@ state cannot leak into the next measurement.
 Reports and PNG plots are written to `experiments/report/`:
 
 - 0 varying dimensions: Rich result and JSON report only.
-- 1 varying dimension: six median line charts; timing and throughput charts
-  include min/max bands.
-- 2 varying dimensions: six annotated median heatmaps; timing and throughput
-  cells also show min/max values.
+- 1 varying dimension: thirteen mean line charts; summarized metrics include
+  standard-deviation bands.
+- 2 varying dimensions: thirteen annotated mean heatmaps; summarized metric
+  cells also show standard deviation.
 
-The six plotted metrics are elapsed time, request throughput, output throughput,
-total throughput, peak KV-cache blocks, and peak KV-cache utilization.
+The thirteen plotted metrics cover elapsed time, latency p50/p90/p99, request,
+output, total, prefill, and decode throughput, prefill/decode time, and the two
+KV-cache occupancy metrics. Output and total throughput remain available because
+they describe end-to-end serving rates rather than phase-local execution rates.
 
 Existing experiment reports can be plotted again without running the model:
 
@@ -254,7 +257,8 @@ python experiments/experiment.py --plot-only \
 
 Only the explicitly listed reports form the plotting group. They must contain
 compatible `experiment_config` and result payloads. Reports containing only the
-legacy GPU allocator peak fields must be regenerated before using plot-only mode.
+legacy GPU allocator peak fields or lacking latency/phase metrics must be
+regenerated before using plot-only mode.
 
 <a id="pluggable-design"></a>
 

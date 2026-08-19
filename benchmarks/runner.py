@@ -30,6 +30,11 @@ class BatchRunResult:
     total_tokens: int
     peak_kvcache_blocks: int
     kvcache_capacity_blocks: int
+    request_latencies: tuple[float, ...]
+    prefill_time: float
+    decode_time: float
+    prefill_tokens: int
+    decode_tokens: int
 
 
 class BenchmarkRunner:
@@ -97,6 +102,7 @@ class BenchmarkRunner:
         torch.cuda.synchronize()
         elapsed_time = perf_counter() - start_time
         peak_kvcache_blocks = self.llm.get_peak_kvcache_blocks()
+        generation_metrics = self.llm.last_generation_metrics
 
         if len(outputs) != len(benchmark_requests):
             raise RuntimeError(
@@ -113,4 +119,9 @@ class BenchmarkRunner:
             total_tokens=input_tokens + output_tokens,
             peak_kvcache_blocks=peak_kvcache_blocks,
             kvcache_capacity_blocks=self.configuration.num_kvcache_blocks,
+            request_latencies=generation_metrics.request_latencies,
+            prefill_time=generation_metrics.prefill_time,
+            decode_time=generation_metrics.decode_time,
+            prefill_tokens=generation_metrics.prefill_tokens,
+            decode_tokens=generation_metrics.decode_tokens,
         )

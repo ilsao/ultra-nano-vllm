@@ -1,5 +1,5 @@
 import atexit
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
@@ -10,6 +10,15 @@ from nanovllm.engine.component import EngineComponent
 from nanovllm.sampling_params import SamplingParams
 from nanovllm.engine.sequence import Sequence
 from nanovllm.engine.model_runner import ModelRunner
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationMetrics:
+    request_latencies: tuple[float, ...]
+    prefill_time: float
+    decode_time: float
+    prefill_tokens: int
+    decode_tokens: int
 
 
 class LLMEngine:
@@ -176,23 +185,49 @@ class LLMEngine:
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
         outputs = {}
+        request_latencies = {}
+        generation_start = perf_counter()
+        prefill_time = decode_time = 0.0
+        prefill_tokens = decode_tokens = 0
         prefill_throughput = decode_throughput = 0.
 
         while not self.is_finished():
             t = perf_counter()
             output, num_tokens = self.step()
+            step_end = perf_counter()
+            step_time = step_end - t
             if num_tokens > 0:  # prefill phase
-                prefill_throughput = num_tokens / (perf_counter() - t)
+                prefill_time += step_time
+                prefill_tokens += num_tokens
+                prefill_throughput = (
+                    prefill_tokens / prefill_time if prefill_time else 0.0
+                )
             else:               # decode phase
-                decode_throughput = -num_tokens / (perf_counter() - t)
+                decode_time += step_time
+                decode_tokens -= num_tokens
+                decode_throughput = (
+                    decode_tokens / decode_time if decode_time else 0.0
+                )
             pbar.set_postfix({
                 "Prefill": f"{int(prefill_throughput)}tok/s",
                 "Decode": f"{int(decode_throughput)}tok/s",
             })
             for seq_id, token_ids in output:
                 outputs[seq_id] = token_ids
+                request_latencies[seq_id] = step_end - generation_start
                 pbar.update(1)
         pbar.close()
+
+        self.last_generation_metrics = GenerationMetrics(
+            request_latencies=tuple(
+                request_latencies[seq_id]
+                for seq_id in sorted(request_latencies)
+            ),
+            prefill_time=prefill_time,
+            decode_time=decode_time,
+            prefill_tokens=prefill_tokens,
+            decode_tokens=decode_tokens,
+        )
         
         # sort the outputs by sequence ID to maintain the order of prompts
         # the type of outputs change from dict to list

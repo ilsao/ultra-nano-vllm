@@ -67,8 +67,8 @@ flowchart TD
     CALLER -->|experiment parent| EOUTPUT["Rich result + experiment JSON"]
     EOUTPUT --> DISPATCH{"Varying dimensions"}
     DISPATCH -->|0D| RESULT["Result only"]
-    DISPATCH -->|1D| LINE["6 line plots"]
-    DISPATCH -->|2D| HEATMAP["6 heatmaps"]
+    DISPATCH -->|1D| LINE["13 line plots"]
+    DISPATCH -->|2D| HEATMAP["13 heatmaps"]
     EOUTPUT --> EREPORT["experiments/report/"]
     RESULT --> EREPORT
     LINE --> EREPORT
@@ -163,8 +163,9 @@ python benchmarks/benchmark.py \
 加入 `--enforce-eager` 可停用 CUDA graph 執行。
 
 Benchmark 會顯示 Rich 結果表，並將 JSON 報告寫入 `benchmarks/report/`。
-每份報告包含 workload 總量、時間與吞吐量的 median/minimum/maximum、
-KV-cache peak used blocks 與 peak utilization。
+每份報告包含 workload 總量、時間與吞吐量的 median/minimum/maximum/mean/
+standard deviation、request latency p50/p90/p99、prefill/decode 時間與吞吐量，
+以及 KV-cache peak used blocks 與 peak utilization。
 
 <a id="experiments"></a>
 
@@ -227,11 +228,12 @@ cached allocation 或 NCCL process-group state 洩漏至下一次測量。
 報告與 PNG 圖表會寫入 `experiments/report/`：
 
 - 0 個變化維度：僅產生 Rich 結果與 JSON 報告。
-- 1 個變化維度：產生六張 median 折線圖；時間與吞吐量圖包含 min/max band。
-- 2 個變化維度：產生六張附註 median 的 heatmap；時間與吞吐量 cell 也會顯示 min/max。
+- 1 個變化維度：產生十三張 mean 折線圖；summary 指標包含 standard-deviation band。
+- 2 個變化維度：產生十三張附註 mean 的 heatmap；summary 指標 cell 也會顯示 standard deviation。
 
-六項繪圖指標為 elapsed time、request throughput、output throughput、total throughput、
-peak KV-cache blocks 與 peak KV-cache utilization。
+十三項繪圖指標涵蓋 elapsed time、latency p50/p90/p99、request/output/total/prefill/
+decode throughput、prefill/decode time，以及兩項 KV-cache 使用量指標。Output 與 total
+throughput 仍予保留，因為它們描述端到端服務率，而非單一 phase 的執行率。
 
 可以只使用既有 experiment 報告重新繪圖，而不執行模型：
 
@@ -243,6 +245,7 @@ python experiments/experiment.py --plot-only \
 
 只有明確列出的報告會組成該繪圖群組，且必須包含相容的 `experiment_config` 與 result payload。
 僅包含舊版 GPU allocator peak 欄位的報告，必須重新執行實驗後才能用於 plot-only mode。
+缺少 latency/phase 指標的舊報告亦須重新執行實驗。
 
 <a id="pluggable-design"></a>
 

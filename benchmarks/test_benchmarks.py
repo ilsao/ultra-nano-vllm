@@ -210,6 +210,13 @@ class BenchmarkRunnerTests(unittest.TestCase):
             num_kvcache_blocks=10,
         )
         fake_llm.get_peak_kvcache_blocks.return_value = 6
+        fake_llm.last_generation_metrics = SimpleNamespace(
+            request_latencies=(1.0, 1.5),
+            prefill_time=0.5,
+            decode_time=1.0,
+            prefill_tokens=3,
+            decode_tokens=3,
+        )
 
         with (
             patch("benchmarks.runner.perf_counter", side_effect=[10.0, 12.0]),
@@ -232,6 +239,11 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(result.total_tokens, 8)
         self.assertEqual(result.peak_kvcache_blocks, 6)
         self.assertEqual(result.kvcache_capacity_blocks, 10)
+        self.assertEqual(result.request_latencies, (1.0, 1.5))
+        self.assertEqual(result.prefill_time, 0.5)
+        self.assertEqual(result.decode_time, 1.0)
+        self.assertEqual(result.prefill_tokens, 3)
+        self.assertEqual(result.decode_tokens, 3)
 
     def test_close_shuts_down_underlying_engine(self):
         runner = BenchmarkRunner.__new__(BenchmarkRunner)
@@ -243,6 +255,44 @@ class BenchmarkRunnerTests(unittest.TestCase):
 
 
 class LLMEngineLifecycleTests(unittest.TestCase):
+    def test_generate_records_phase_times_tokens_and_request_latencies(self):
+        engine = LLMEngine.__new__(LLMEngine)
+        engine.add_request = Mock()
+        engine.is_finished = Mock(side_effect=[False, False, True])
+        engine.step = Mock(
+            side_effect=[
+                ([(0, [10])], 2),
+                ([(1, [20, 21])], -1),
+            ]
+        )
+        engine.tokenizer = SimpleNamespace(decode=lambda tokens: str(tokens))
+
+        with patch(
+            "nanovllm.engine.llm_engine.perf_counter",
+            side_effect=[0.0, 0.0, 2.0, 2.0, 5.0],
+        ):
+            outputs = engine.generate(
+                [[1], [2]],
+                [SamplingParams(), SamplingParams()],
+                use_tqdm=False,
+            )
+
+        self.assertEqual(
+            outputs,
+            [
+                {"text": "[10]", "token_ids": [10]},
+                {"text": "[20, 21]", "token_ids": [20, 21]},
+            ],
+        )
+        self.assertEqual(
+            engine.last_generation_metrics.request_latencies,
+            (2.0, 5.0),
+        )
+        self.assertEqual(engine.last_generation_metrics.prefill_time, 2.0)
+        self.assertEqual(engine.last_generation_metrics.decode_time, 3.0)
+        self.assertEqual(engine.last_generation_metrics.prefill_tokens, 2)
+        self.assertEqual(engine.last_generation_metrics.decode_tokens, 1)
+
     def test_exit_is_idempotent_and_releases_workers(self):
         engine = LLMEngine.__new__(LLMEngine)
         engine._closed = False
@@ -267,7 +317,20 @@ class LLMEngineLifecycleTests(unittest.TestCase):
 class MetricsTests(unittest.TestCase):
     def test_aggregates_median_range_and_peak_kvcache_usage(self):
         runs = [
-            BatchRunResult(t, 4, 12, 8, 20, peak, 20)
+            BatchRunResult(
+                t,
+                4,
+                12,
+                8,
+                20,
+                peak,
+                20,
+                (0.5, 1.0, 1.5, 2.0),
+                t / 4,
+                t / 2,
+                12,
+                4,
+            )
             for t, peak in [
                 (1.0, 10),
                 (4.0, 12),
@@ -284,20 +347,47 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(result.request_throughput.median, 2.0)
         self.assertEqual(result.request_throughput.minimum, 1.0)
         self.assertEqual(result.request_throughput.maximum, 4.0)
+        self.assertAlmostEqual(result.elapsed_time.mean, 7 / 3)
+        self.assertGreater(result.elapsed_time.standard_deviation, 0)
+        self.assertEqual(result.latency_p50.median, 1.25)
+        self.assertAlmostEqual(result.latency_p90.median, 1.85)
+        self.assertAlmostEqual(result.latency_p99.median, 1.985)
+        self.assertEqual(result.prefill_throughput.median, 24.0)
+        self.assertEqual(result.decode_throughput.median, 4.0)
+        self.assertEqual(result.prefill_time.median, 0.5)
+        self.assertEqual(result.decode_time.median, 1.0)
         self.assertEqual(result.peak_kvcache_blocks, 12)
         self.assertEqual(result.peak_kvcache_utilization, 0.6)
 
     def test_rejects_invalid_kvcache_usage(self):
         cases = [
-            ([BatchRunResult(1.0, 1, 1, 1, 2, 1, 0)], "greater than zero"),
             (
                 [
-                    BatchRunResult(1.0, 1, 1, 1, 2, 1, 2),
-                    BatchRunResult(1.0, 1, 1, 1, 2, 1, 3),
+                    BatchRunResult(
+                        1.0, 1, 1, 1, 2, 1, 0, (1.0,), .5, .5, 1, 1
+                    )
+                ],
+                "greater than zero",
+            ),
+            (
+                [
+                    BatchRunResult(
+                        1.0, 1, 1, 1, 2, 1, 2, (1.0,), .5, .5, 1, 1
+                    ),
+                    BatchRunResult(
+                        1.0, 1, 1, 1, 2, 1, 3, (1.0,), .5, .5, 1, 1
+                    ),
                 ],
                 "same KV-cache block capacity",
             ),
-            ([BatchRunResult(1.0, 1, 1, 1, 2, 3, 2)], "within block capacity"),
+            (
+                [
+                    BatchRunResult(
+                        1.0, 1, 1, 1, 2, 3, 2, (1.0,), .5, .5, 1, 1
+                    )
+                ],
+                "within block capacity",
+            ),
         ]
         for runs, message in cases:
             with self.subTest(message=message), self.assertRaisesRegex(
@@ -305,6 +395,26 @@ class MetricsTests(unittest.TestCase):
                 message,
             ):
                 metrics.compute_benchmark_result(runs)
+
+    def test_allows_a_workload_without_decode_steps(self):
+        result = metrics.compute_benchmark_result([
+            BatchRunResult(
+                1.0, 1, 1, 1, 2, 1, 2, (1.0,), .5, 0.0, 1, 0
+            )
+        ])
+
+        self.assertEqual(result.decode_time.mean, 0.0)
+        self.assertEqual(result.decode_throughput.mean, 0.0)
+
+    def test_rejects_invalid_latency_and_phase_measurements(self):
+        invalid_runs = [
+            BatchRunResult(1.0, 1, 1, 1, 2, 1, 2, (), .5, .5, 1, 1),
+            BatchRunResult(1.0, 1, 1, 1, 2, 1, 2, (1.0,), 0, .5, 1, 1),
+            BatchRunResult(1.0, 1, 1, 1, 2, 1, 2, (1.0,), .5, 0, 1, 1),
+        ]
+        for run in invalid_runs:
+            with self.subTest(run=run), self.assertRaises(ValueError):
+                metrics.compute_benchmark_result([run])
 
     def test_rejects_empty_results(self):
         with self.assertRaises(ValueError):
@@ -350,9 +460,16 @@ class ReporterTests(unittest.TestCase):
             output_tokens=metrics.MetricSummary(262144, 262144, 262144),
             total_tokens=metrics.MetricSummary(524288, 520000, 524288),
             elapsed_time=metrics.MetricSummary(202.01, 195.03, 204.53),
+            latency_p50=metrics.MetricSummary(100, 90, 110, 100, 5),
+            latency_p90=metrics.MetricSummary(180, 170, 190, 180, 5),
+            latency_p99=metrics.MetricSummary(200, 190, 204, 199, 4),
             request_throughput=metrics.MetricSummary(1.27, 1.25, 1.31),
             output_throughput=metrics.MetricSummary(1297.68, 1281.69, 1344.10),
             total_throughput=metrics.MetricSummary(2595.37, 2563.38, 2688.20),
+            prefill_throughput=metrics.MetricSummary(3000, 2900, 3100, 3000, 50),
+            decode_throughput=metrics.MetricSummary(1200, 1100, 1300, 1200, 50),
+            prefill_time=metrics.MetricSummary(80, 75, 85, 80, 3),
+            decode_time=metrics.MetricSummary(120, 115, 125, 120, 3),
             peak_kvcache_blocks=9876,
             peak_kvcache_utilization=0.8,
         )
@@ -383,6 +500,9 @@ class ReporterTests(unittest.TestCase):
         self.assertIn("262,144 tokens", rendered)
         self.assertNotIn("262,144 tokens – 262,144 tokens", rendered)
         self.assertIn("1,297.68 tok/s", rendered)
+        self.assertIn("Latency p99", rendered)
+        self.assertIn("Prefill throughput", rendered)
+        self.assertIn("199.00 ± 4.00 s", rendered)
         self.assertIn("9,876 blocks", rendered)
         self.assertIn("80.00%", rendered)
         self.assertNotIn("\x1b", rendered)
@@ -430,9 +550,16 @@ class ReporterTests(unittest.TestCase):
             output_tokens=metrics.MetricSummary(262144, 262144, 262144),
             total_tokens=metrics.MetricSummary(524288, 520000, 524288),
             elapsed_time=metrics.MetricSummary(202.01, 195.03, 204.53),
+            latency_p50=metrics.MetricSummary(100, 90, 110, 100, 5),
+            latency_p90=metrics.MetricSummary(180, 170, 190, 180, 5),
+            latency_p99=metrics.MetricSummary(200, 190, 204, 199, 4),
             request_throughput=metrics.MetricSummary(1.27, 1.25, 1.31),
             output_throughput=metrics.MetricSummary(1297.68, 1281.69, 1344.10),
             total_throughput=metrics.MetricSummary(2595.37, 2563.38, 2688.20),
+            prefill_throughput=metrics.MetricSummary(3000, 2900, 3100, 3000, 50),
+            decode_throughput=metrics.MetricSummary(1200, 1100, 1300, 1200, 50),
+            prefill_time=metrics.MetricSummary(80, 75, 85, 80, 3),
+            decode_time=metrics.MetricSummary(120, 115, 125, 120, 3),
             peak_kvcache_blocks=9876,
             peak_kvcache_utilization=0.8,
         )
@@ -465,10 +592,21 @@ class ReporterTests(unittest.TestCase):
         self.assertEqual(report["result"]["repeats"], 3)
         self.assertEqual(
             report["result"]["elapsed_time"],
-            {"median": 202.01, "minimum": 195.03, "maximum": 204.53},
+            {
+                "median": 202.01,
+                "minimum": 195.03,
+                "maximum": 204.53,
+                "mean": None,
+                "standard_deviation": None,
+            },
         )
         self.assertEqual(report["result"]["peak_kvcache_blocks"], 9876)
         self.assertEqual(report["result"]["peak_kvcache_utilization"], 0.8)
+        self.assertEqual(report["result"]["latency_p99"]["mean"], 199)
+        self.assertEqual(
+            report["result"]["latency_p99"]["standard_deviation"],
+            4,
+        )
         console.print.assert_called_once_with(
             f"[bold green]✓[/] Report saved to [cyan]{report_path}[/cyan]"
         )
@@ -486,7 +624,9 @@ class ReporterTests(unittest.TestCase):
             num_kvcache_blocks=100,
         )
         result = metrics.compute_benchmark_result([
-            BatchRunResult(1.0, 1, 2, 3, 5, 4, 6)
+            BatchRunResult(
+                1.0, 1, 2, 3, 5, 4, 6, (1.0,), .4, .6, 2, 2
+            )
         ])
         experiment_config = benchmark_cli.BenchmarkConfig(
             num_requests=1,
