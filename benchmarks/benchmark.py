@@ -1,132 +1,184 @@
 import argparse
+from dataclasses import dataclass, fields
 import os
 from pathlib import Path
-import re
 import sys
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from benchmarks import metrics, workloads
-from benchmarks.reporter import BenchmarkReporter
-from benchmarks.runner import BenchmarkRunner
+from benchmarks.runner import BenchmarkConfiguration, BenchmarkRunner
+from experiments.config import (
+    DEFAULT_EXPERIMENT_NAME,
+    DEFAULT_MODEL_PATH,
+    validate_experiment_name,
+    validate_field_value,
+)
+from utils.reporter import Reporter
 
 
-DEFAULT_MODEL_PATH = "~/huggingface/Qwen3-0.6B/"
-DEFAULT_SERVING_SYSTEM_NAME = "nano-vllm"
+@dataclass(frozen=True, slots=True)
+class BenchmarkConfig:
+    """One fully resolved benchmark run."""
+
+    model: str = DEFAULT_MODEL_PATH
+    num_requests: int = 256
+    input_len: int = 1024
+    output_len: int = 1024
+    seed: int = 0
+    temperature: float = 0.6
+    repeats: int = 3
+    enforce_eager: bool = False
+    experiment_name: str = DEFAULT_EXPERIMENT_NAME
+
+    def __post_init__(self) -> None:
+        for field in fields(self):
+            validate_field_value(field.name, getattr(self, field.name))
 
 
-def serving_system_name(value: str) -> str:
-    """Validate the serving system name."""
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", value) or ".." in value:
-        raise argparse.ArgumentTypeError(
-            "serving system name may contain only letters, numbers, '.', '_', "
-            "and '-', without '..'"
-        )
-    return value
+def experiment_name(value: str) -> str:
+    """Validate the experiment name for argparse."""
+    try:
+        return validate_experiment_name(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Benchmark offline LLM throughput.")
+def add_benchmark_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    include_defaults: bool,
+) -> None:
+    """Add the scalar benchmark options shared by benchmark and sweep CLIs."""
+    defaults = BenchmarkConfig()
+
+    def default(field_name: str):
+        return getattr(defaults, field_name) if include_defaults else None
+
     parser.add_argument(
         "--model",
-        default=DEFAULT_MODEL_PATH,
-        help="Local model path (default: %(default)s).",
+        default=default("model"),
+        help=f"Local model path (default: {DEFAULT_MODEL_PATH}).",
     )
     parser.add_argument(
         "--num-requests",
         type=int,
-        default=256,
+        default=default("num_requests"),
         help="Number of requests in each offline batch.",
     )
     parser.add_argument(
         "--input-len",
         type=int,
-        default=1024,
+        default=default("input_len"),
         help="Exact prompt length in tokens for every request.",
     )
     parser.add_argument(
         "--output-len",
         type=int,
-        default=1024,
+        default=default("output_len"),
         help="Exact maximum output length in tokens for every request.",
     )
-    parser.add_argument("--seed", type=int, default=0, help="Workload random seed.")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=default("seed"),
+        help="Workload random seed.",
+    )
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.6,
+        default=default("temperature"),
         help="Sampling temperature.",
     )
     parser.add_argument(
         "--repeats",
         type=int,
-        default=3,
+        default=default("repeats"),
         help="Number of measured offline batches.",
     )
     parser.add_argument(
         "--enforce-eager",
         action="store_true",
+        default=default("enforce_eager"),
         help="Enforce eager execution mode.",
     )
     parser.add_argument(
-        "--serving-system-name",
-        type=serving_system_name,
-        default=DEFAULT_SERVING_SYSTEM_NAME,
-        help="Serving system name used in the JSON report filename.",
+        "--experiment-name",
+        type=experiment_name,
+        default=default("experiment_name"),
+        help="Experiment name used in the JSON report filename.",
     )
-    args = parser.parse_args()
-    if args.num_requests <= 0:
-        parser.error("--num-requests must be greater than zero")
-    if args.input_len <= 0:
-        parser.error("--input-len must be greater than zero")
-    if args.output_len <= 0:
-        parser.error("--output-len must be greater than zero")
-    if args.temperature <= 1e-10:
-        parser.error("--temperature must be greater than 1e-10")
-    if args.repeats <= 0:
-        parser.error("--repeats must be greater than zero")
-    return args
 
 
-def make_workload(args, runner: BenchmarkRunner, seed: int, num_requests: int):
+def parse_args(argv: list[str] | None = None) -> BenchmarkConfig:
+    parser = argparse.ArgumentParser(description="Benchmark offline LLM throughput.")
+    add_benchmark_arguments(parser, include_defaults=True)
+    namespace = parser.parse_args(argv)
+    try:
+        return BenchmarkConfig(**vars(namespace))
+    except (TypeError, ValueError) as exc:
+        parser.error(str(exc))
+
+
+def make_workload(
+    config: BenchmarkConfig,
+    runner: BenchmarkRunner,
+    seed: int,
+    num_requests: int,
+):
     return workloads.synthetic_workload(
         num_requests=num_requests,
-        input_len=args.input_len,
-        output_len=args.output_len,
+        input_len=config.input_len,
+        output_len=config.output_len,
         seed=seed,
-        temperature=args.temperature,
+        temperature=config.temperature,
         vocab_size=runner.vocab_size,
         max_model_len=runner.max_model_len,
     )
 
 
-def main():
-    args = parse_args()
-    reporter = BenchmarkReporter()
-    model_path = os.path.expanduser(args.model)
+def execute_benchmark(
+    config: BenchmarkConfig,
+    reporter: Reporter,
+    *,
+    close_runner: bool = False,
+) -> tuple[metrics.BenchmarkResult, BenchmarkConfiguration]:
+    """Measure one scalar benchmark configuration without rendering or saving."""
     runner = BenchmarkRunner(
-        model_path=model_path,
-        enforce_eager=args.enforce_eager,
+        model_path=os.path.expanduser(config.model),
+        enforce_eager=config.enforce_eager,
     )
+    try:
+        with reporter.warmup():
+            runner.warmup(
+                make_workload(config, runner, config.seed, num_requests=10)
+            )
+        reporter.warmup_complete()
 
-    with reporter.warmup():
-        runner.warmup(make_workload(args, runner, args.seed, num_requests=10))
-    reporter.warmup_complete()
+        run_results = []
+        for run_index in reporter.track_repeats(config.repeats):
+            benchmark_requests = make_workload(
+                config,
+                runner,
+                config.seed + 1 + run_index,
+                num_requests=config.num_requests,
+            )
+            run_results.append(runner.run_benchmark(benchmark_requests))
 
-    run_results = []
-    for run_index in reporter.track_repeats(args.repeats):
-        benchmark_requests = make_workload(
-            args,
-            runner,
-            args.seed + 1 + run_index,
-            num_requests=args.num_requests,
-        )
-        run_results.append(runner.run_benchmark(benchmark_requests))
+        result = metrics.compute_benchmark_result(run_results)
+        return result, runner.configuration
+    finally:
+        if close_runner:
+            runner.close()
 
-    result = metrics.compute_benchmark_result(run_results)
-    reporter.show_result(result, runner.configuration)
-    reporter.save_result(result, runner.configuration, args.serving_system_name)
+
+def main() -> None:
+    config = parse_args()
+    reporter = Reporter()
+    result, configuration = execute_benchmark(config, reporter)
+    reporter.show_result(result, configuration)
+    reporter.save_result(result, configuration, config.experiment_name)
 
 
 if __name__ == "__main__":

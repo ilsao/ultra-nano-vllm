@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import asdict
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich import box
 from rich.console import Console, Group
@@ -21,16 +21,20 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from .metrics import BenchmarkResult, MetricSummary
+from benchmarks.metrics import BenchmarkResult, MetricSummary
 
 if TYPE_CHECKING:
-    from .runner import BenchmarkConfiguration
+    from benchmarks.benchmark import BenchmarkConfig
+    from benchmarks.runner import BenchmarkConfiguration
 
 
-REPORT_DIR = Path(__file__).resolve().parent / "report"
+# Keep standalone benchmark reports in their established output directory.
+REPORT_DIR = Path(__file__).resolve().parent.parent / "benchmarks" / "report"
 
 
-class BenchmarkReporter:
+class Reporter:
+    """Render benchmark progress/results and persist structured reports."""
+
     def __init__(self, console: Console | None = None):
         self.console = console or Console()
 
@@ -164,28 +168,21 @@ class BenchmarkReporter:
         self,
         bench_result: BenchmarkResult,
         configuration: BenchmarkConfiguration,
-        serving_system_name: str,
+        experiment_name: str,
+        *,
+        output_path: Path | None = None,
+        experiment_config: BenchmarkConfig | None = None,
     ) -> Path:
-        """ 
-        Save the benchmark result to a JSON file in the report directory.
-        
-        Args:
-            bench_result (BenchmarkResult): The benchmark result to save.
-            configuration (BenchmarkConfiguration): The benchmark configuration.
-            serving_system_name (str): The name of the serving system, used in the filename.
-            
-        Returns:
-            Path: The path to the saved JSON file.
-        """
-        REPORT_DIR.mkdir(parents=True, exist_ok=True)
-        report_path = REPORT_DIR / (
-            f"{_report_timestamp()}-{serving_system_name}-benchmark.json"
+        """Save a benchmark result as a structured JSON report."""
+        report_path = output_path or REPORT_DIR / (
+            f"{_report_timestamp()}-{experiment_name}-benchmark.json"
         )
-        report = {
-            "serving_system_name": serving_system_name,
-            "configuration": asdict(configuration),
-            "result": asdict(bench_result),
-        }
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report: dict[str, Any] = {"experiment_name": experiment_name}
+        if experiment_config is not None:
+            report["experiment_config"] = asdict(experiment_config)
+        report["configuration"] = asdict(configuration)
+        report["result"] = asdict(bench_result)
         report_path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -194,6 +191,13 @@ class BenchmarkReporter:
             f"[bold green]✓[/] Report saved to [cyan]{report_path}[/cyan]"
         )
         return report_path
+
+    def show_plot_paths(self, paths: Sequence[Path]) -> None:
+        """Display the output path for each generated experiment plot."""
+        for path in paths:
+            self.console.print(
+                f"[bold green]✓[/] Plot saved to [cyan]{path}[/cyan]"
+            )
 
 
 def _report_timestamp() -> str:

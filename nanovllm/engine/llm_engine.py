@@ -35,6 +35,7 @@ class LLMEngine:
         # Create a Config instance from the filtered parameters
         config = Config(model, **config_kwargs)
         Sequence.block_size = config.kvcache_block_size
+        self._closed = False
         # ps stands for processes, events are used for inter-process communication
         self.ps = []
         self.events = []
@@ -59,13 +60,23 @@ class LLMEngine:
 
     def exit(self):
         """
-        Clean up the LLMEngine by signaling the model runner to exit and joining 
-        all worker processes.
+        Clean up the LLMEngine exactly once.
+
+        Explicit shutdown unregisters the atexit callback so the bound method no
+        longer keeps the engine alive between sequential experiment runs.
         """
-        self.model_runner.call("exit")
-        del self.model_runner
-        for p in self.ps:
-            p.join()
+        if self._closed:
+            return
+        self._closed = True
+        atexit.unregister(self.exit)
+        try:
+            self.model_runner.call("exit")
+        finally:
+            del self.model_runner
+            for process in self.ps:
+                process.join()
+            self.ps.clear()
+            self.events.clear()
 
     def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
         """

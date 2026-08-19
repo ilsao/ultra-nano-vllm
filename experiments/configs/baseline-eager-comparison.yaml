@@ -1,0 +1,13 @@
+model: ~/huggingface/Qwen3-0.6B/
+num_requests: 256
+input_len: 1024
+output_len: 1024
+seed: 0
+temperature: 0.6
+repeats: 2
+
+enforce_eager: [false, true]
+
+experiment_name:
+  - baseline-cuda-graph
+  - baseline-eager

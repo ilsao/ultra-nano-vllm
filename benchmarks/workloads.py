@@ -26,8 +26,8 @@ def synthetic_workload(
         raise ValueError("input_len must be greater than zero")
     if output_len <= 0:
         raise ValueError("output_len must be greater than zero")
-    if temperature <= 1e-10:
-        raise ValueError("temperature must be greater than 1e-10")
+    if temperature != 0 and temperature <= 1e-10:
+        raise ValueError("temperature must be zero or greater than 1e-10")
     if vocab_size <= 0:
         raise ValueError("vocab_size must be greater than zero")
     if max_model_len <= 0:
