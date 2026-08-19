@@ -56,7 +56,19 @@ def add_benchmark_arguments(
     *,
     include_defaults: bool,
 ) -> None:
-    """Add the scalar benchmark options shared by benchmark and sweep CLIs."""
+    """
+    Add the scalar benchmark options shared by benchmark and sweep CLIs.
+
+    Supported options:
+        - model
+        - num-requests
+        - input-len
+        - output-len
+        - seed
+        - temperature
+        - repeats
+        - enforce-eager
+    """
     defaults = BenchmarkConfig()
 
     def default(field_name: str):

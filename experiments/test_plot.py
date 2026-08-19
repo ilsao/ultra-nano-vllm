@@ -32,8 +32,8 @@ def make_result(value: float) -> BenchmarkResult:
         request_throughput=summary,
         output_throughput=summary,
         total_throughput=summary,
-        peak_memory_allocated_mib=value + 10,
-        peak_memory_reserved_mib=value + 20,
+        peak_kvcache_blocks=int(value + 10),
+        peak_kvcache_utilization=(value + 10) / 100,
     )
 
 
@@ -101,6 +101,12 @@ class PlotTests(unittest.TestCase):
             self.assertTrue(all(path.exists() for path in paths))
             self.assertTrue(all(path.suffix == ".png" for path in paths))
             self.assertTrue(all("1d-num_requests" in path.name for path in paths))
+            self.assertTrue(
+                any("peak-kvcache-blocks" in path.name for path in paths)
+            )
+            self.assertTrue(
+                any("peak-kvcache-utilization" in path.name for path in paths)
+            )
 
     def test_plot_2d_supports_categorical_axes_and_saves_six_files(self):
         records = []
@@ -184,6 +190,27 @@ class PlotTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(load_reports([old]), [PlotRecord(config, result)])
+
+            legacy = Path(temp_dir) / "legacy-memory.json"
+            legacy_result = asdict(result)
+            legacy_result.pop("peak_kvcache_blocks")
+            legacy_result.pop("peak_kvcache_utilization")
+            legacy_result["peak_memory_allocated_mib"] = 1024.0
+            legacy_result["peak_memory_reserved_mib"] = 2048.0
+            legacy.write_text(
+                json.dumps(
+                    {
+                        "experiment_config": asdict(config),
+                        "result": legacy_result,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "legacy GPU-memory metrics.*rerun",
+            ):
+                load_reports([legacy])
 
             invalid = Path(temp_dir) / "invalid.json"
             invalid.write_text('{"result": {}}', encoding="utf-8")

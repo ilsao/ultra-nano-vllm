@@ -76,18 +76,18 @@ _METRICS = (
         lambda result: result.total_throughput,
     ),
     _Metric(
-        "peak-memory-allocated",
-        "Peak memory allocated",
-        "MiB",
+        "peak-kvcache-blocks",
+        "Peak KV-cache blocks",
+        "blocks",
         False,
-        lambda result: result.peak_memory_allocated_mib,
+        lambda result: result.peak_kvcache_blocks,
     ),
     _Metric(
-        "peak-memory-reserved",
-        "Peak memory reserved",
-        "MiB",
+        "peak-kvcache-utilization",
+        "Peak KV-cache utilization",
+        "%",
         False,
-        lambda result: result.peak_memory_reserved_mib,
+        lambda result: result.peak_kvcache_utilization * 100,
     ),
 )
 
@@ -317,6 +317,19 @@ def plot_2d(
 
 def _decode_result(raw: dict[str, object]) -> BenchmarkResult:
     decoded = dict(raw)
+    if (
+        "peak_kvcache_blocks" not in decoded
+        or "peak_kvcache_utilization" not in decoded
+    ):
+        if {
+            "peak_memory_allocated_mib",
+            "peak_memory_reserved_mib",
+        } & decoded.keys():
+            raise ValueError(
+                "report uses legacy GPU-memory metrics; rerun the experiment "
+                "to collect KV-cache block metrics"
+            )
+        raise ValueError("result is missing KV-cache block metrics")
     for field_name in (
         "output_tokens",
         "total_tokens",

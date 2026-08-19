@@ -14,6 +14,12 @@ class Scheduler:
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
 
+    def reset_kvcache_metrics(self) -> None:
+        self.block_manager.reset_peak_usage()
+
+    def get_peak_kvcache_blocks(self) -> int:
+        return self.block_manager.peak_used_blocks
+
     def is_finished(self):
         return not self.waiting and not self.running
 

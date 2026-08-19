@@ -198,21 +198,22 @@ class BenchmarkRunnerTests(unittest.TestCase):
         ]
         runner = BenchmarkRunner.__new__(BenchmarkRunner)
         runner.llm = fake_llm
+        runner.configuration = BenchmarkConfiguration(
+            model="model",
+            device="GPU",
+            dtype="bfloat16",
+            tensor_parallel_size=1,
+            enforce_eager=False,
+            block_size=256,
+            max_model_len=4096,
+            gpu_memory_utilization=0.9,
+            num_kvcache_blocks=10,
+        )
+        fake_llm.get_peak_kvcache_blocks.return_value = 6
 
         with (
             patch("benchmarks.runner.perf_counter", side_effect=[10.0, 12.0]),
             patch("benchmarks.runner.torch.cuda.synchronize") as synchronize,
-            patch(
-                "benchmarks.runner.torch.cuda.reset_peak_memory_stats"
-            ) as reset_peak,
-            patch(
-                "benchmarks.runner.torch.cuda.max_memory_allocated",
-                return_value=4 * 1024**2,
-            ),
-            patch(
-                "benchmarks.runner.torch.cuda.max_memory_reserved",
-                return_value=6 * 1024**2,
-            ),
         ):
             result = runner.run_benchmark(requests)
 
@@ -222,14 +223,15 @@ class BenchmarkRunnerTests(unittest.TestCase):
             use_tqdm=False,
         )
         self.assertEqual(synchronize.call_args_list, [call(), call()])
-        reset_peak.assert_called_once_with()
+        fake_llm.reset_kvcache_metrics.assert_called_once_with()
+        fake_llm.get_peak_kvcache_blocks.assert_called_once_with()
         self.assertEqual(result.elapsed_time, 2.0)
         self.assertEqual(result.num_requests, 2)
         self.assertEqual(result.input_tokens, 3)
         self.assertEqual(result.output_tokens, 5)
         self.assertEqual(result.total_tokens, 8)
-        self.assertEqual(result.peak_memory_allocated_mib, 4.0)
-        self.assertEqual(result.peak_memory_reserved_mib, 6.0)
+        self.assertEqual(result.peak_kvcache_blocks, 6)
+        self.assertEqual(result.kvcache_capacity_blocks, 10)
 
     def test_close_shuts_down_underlying_engine(self):
         runner = BenchmarkRunner.__new__(BenchmarkRunner)
@@ -263,13 +265,13 @@ class LLMEngineLifecycleTests(unittest.TestCase):
 
 
 class MetricsTests(unittest.TestCase):
-    def test_aggregates_median_range_and_peak_memory(self):
+    def test_aggregates_median_range_and_peak_kvcache_usage(self):
         runs = [
-            BatchRunResult(t, 4, 12, 8, 20, allocated, reserved)
-            for t, allocated, reserved in [
-                (1.0, 10.0, 20.0),
-                (4.0, 12.0, 19.0),
-                (2.0, 11.0, 21.0),
+            BatchRunResult(t, 4, 12, 8, 20, peak, 20)
+            for t, peak in [
+                (1.0, 10),
+                (4.0, 12),
+                (2.0, 11),
             ]
         ]
 
@@ -282,8 +284,27 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(result.request_throughput.median, 2.0)
         self.assertEqual(result.request_throughput.minimum, 1.0)
         self.assertEqual(result.request_throughput.maximum, 4.0)
-        self.assertEqual(result.peak_memory_allocated_mib, 12.0)
-        self.assertEqual(result.peak_memory_reserved_mib, 21.0)
+        self.assertEqual(result.peak_kvcache_blocks, 12)
+        self.assertEqual(result.peak_kvcache_utilization, 0.6)
+
+    def test_rejects_invalid_kvcache_usage(self):
+        cases = [
+            ([BatchRunResult(1.0, 1, 1, 1, 2, 1, 0)], "greater than zero"),
+            (
+                [
+                    BatchRunResult(1.0, 1, 1, 1, 2, 1, 2),
+                    BatchRunResult(1.0, 1, 1, 1, 2, 1, 3),
+                ],
+                "same KV-cache block capacity",
+            ),
+            ([BatchRunResult(1.0, 1, 1, 1, 2, 3, 2)], "within block capacity"),
+        ]
+        for runs, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                ValueError,
+                message,
+            ):
+                metrics.compute_benchmark_result(runs)
 
     def test_rejects_empty_results(self):
         with self.assertRaises(ValueError):
@@ -332,8 +353,8 @@ class ReporterTests(unittest.TestCase):
             request_throughput=metrics.MetricSummary(1.27, 1.25, 1.31),
             output_throughput=metrics.MetricSummary(1297.68, 1281.69, 1344.10),
             total_throughput=metrics.MetricSummary(2595.37, 2563.38, 2688.20),
-            peak_memory_allocated_mib=13494.50,
-            peak_memory_reserved_mib=512.0,
+            peak_kvcache_blocks=9876,
+            peak_kvcache_utilization=0.8,
         )
         output = StringIO()
         console = Console(
@@ -358,12 +379,12 @@ class ReporterTests(unittest.TestCase):
         self.assertIn("12,345", rendered)
         self.assertIn("Workload", rendered)
         self.assertIn("Performance", rendered)
-        self.assertIn("Memory", rendered)
+        self.assertIn("KV Cache", rendered)
         self.assertIn("262,144 tokens", rendered)
         self.assertNotIn("262,144 tokens – 262,144 tokens", rendered)
         self.assertIn("1,297.68 tok/s", rendered)
-        self.assertIn("13.18 GiB (13,494.50 MiB)", rendered)
-        self.assertIn("512.00 MiB", rendered)
+        self.assertIn("9,876 blocks", rendered)
+        self.assertIn("80.00%", rendered)
         self.assertNotIn("\x1b", rendered)
 
     def test_progress_advances_once_per_repeat(self):
@@ -412,8 +433,8 @@ class ReporterTests(unittest.TestCase):
             request_throughput=metrics.MetricSummary(1.27, 1.25, 1.31),
             output_throughput=metrics.MetricSummary(1297.68, 1281.69, 1344.10),
             total_throughput=metrics.MetricSummary(2595.37, 2563.38, 2688.20),
-            peak_memory_allocated_mib=13494.50,
-            peak_memory_reserved_mib=512.0,
+            peak_kvcache_blocks=9876,
+            peak_kvcache_utilization=0.8,
         )
         console = Mock()
 
@@ -446,7 +467,8 @@ class ReporterTests(unittest.TestCase):
             report["result"]["elapsed_time"],
             {"median": 202.01, "minimum": 195.03, "maximum": 204.53},
         )
-        self.assertEqual(report["result"]["peak_memory_reserved_mib"], 512.0)
+        self.assertEqual(report["result"]["peak_kvcache_blocks"], 9876)
+        self.assertEqual(report["result"]["peak_kvcache_utilization"], 0.8)
         console.print.assert_called_once_with(
             f"[bold green]✓[/] Report saved to [cyan]{report_path}[/cyan]"
         )
@@ -464,7 +486,7 @@ class ReporterTests(unittest.TestCase):
             num_kvcache_blocks=100,
         )
         result = metrics.compute_benchmark_result([
-            BatchRunResult(1.0, 1, 2, 3, 5, 4.0, 6.0)
+            BatchRunResult(1.0, 1, 2, 3, 5, 4, 6)
         ])
         experiment_config = benchmark_cli.BenchmarkConfig(
             num_requests=1,

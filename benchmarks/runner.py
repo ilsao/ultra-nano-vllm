@@ -8,9 +8,6 @@ from nanovllm import EngineComponent, LLM
 from .workloads import BenchmarkRequest
 
 
-_MIB = 1024 ** 2
-
-
 @dataclass(frozen=True, slots=True)
 class BenchmarkConfiguration:
     model: str
@@ -31,8 +28,8 @@ class BatchRunResult:
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    peak_memory_allocated_mib: float
-    peak_memory_reserved_mib: float
+    peak_kvcache_blocks: int
+    kvcache_capacity_blocks: int
 
 
 class BenchmarkRunner:
@@ -90,7 +87,7 @@ class BenchmarkRunner:
         sampling_params = [req.sampling_params for req in benchmark_requests]
 
         torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
+        self.llm.reset_kvcache_metrics()
         start_time = perf_counter()
         outputs = self.llm.generate(
             prompt_token_ids,
@@ -99,6 +96,7 @@ class BenchmarkRunner:
         )
         torch.cuda.synchronize()
         elapsed_time = perf_counter() - start_time
+        peak_kvcache_blocks = self.llm.get_peak_kvcache_blocks()
 
         if len(outputs) != len(benchmark_requests):
             raise RuntimeError(
@@ -113,6 +111,6 @@ class BenchmarkRunner:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
-            peak_memory_allocated_mib=torch.cuda.max_memory_allocated() / _MIB,
-            peak_memory_reserved_mib=torch.cuda.max_memory_reserved() / _MIB,
+            peak_kvcache_blocks=peak_kvcache_blocks,
+            kvcache_capacity_blocks=self.configuration.num_kvcache_blocks,
         )
