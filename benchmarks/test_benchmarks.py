@@ -47,11 +47,18 @@ class BenchmarkCliArgumentTests(unittest.TestCase):
     def test_accepts_custom_experiment_name(self):
         with patch(
             "sys.argv",
-            ["benchmark.py", "--experiment-name", "custom.vllm_2"],
+            [
+                "benchmark.py",
+                "--experiment-name",
+                "custom.vllm_2",
+                "--max-model-len",
+                "8192",
+            ],
         ):
             args = benchmark_cli.parse_args()
 
         self.assertEqual(args.experiment_name, "custom.vllm_2")
+        self.assertEqual(args.max_model_len, 8192)
 
     def test_rejects_unsafe_experiment_name(self):
         for name in ["", "../vllm", "vllm/name", r"vllm\name", "vllm name"]:
@@ -65,6 +72,23 @@ class BenchmarkCliArgumentTests(unittest.TestCase):
                 self.assertRaises(SystemExit),
             ):
                 benchmark_cli.parse_args()
+
+    def test_rejects_cli_workload_longer_than_max_model_len(self):
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "benchmark.py",
+                    "--input-len",
+                    "4096",
+                    "--output-len",
+                    "1024",
+                ],
+            ),
+            patch("sys.stderr", new=StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            benchmark_cli.parse_args()
 
 class SyntheticWorkloadTests(unittest.TestCase):
     def test_fixed_lengths_vocab_range_and_seed(self):
@@ -656,6 +680,22 @@ class ReporterTests(unittest.TestCase):
 
 
 class BenchmarkCliTests(unittest.TestCase):
+    def test_execute_rejects_invalid_lengths_before_constructing_runner(self):
+        config = benchmark_cli.BenchmarkConfig(
+            input_len=4096,
+            output_len=1024,
+            max_model_len=4096,
+            experiment_name="too-long",
+        )
+
+        with (
+            patch("benchmarks.benchmark.BenchmarkRunner") as runner_type,
+            self.assertRaisesRegex(ValueError, "too-long.*5120"),
+        ):
+            benchmark_cli.execute_benchmark(config, Mock())
+
+        runner_type.assert_not_called()
+
     def test_execute_benchmark_runs_warmup_repeats_and_metrics(self):
         config = benchmark_cli.BenchmarkConfig(
             model="~/model",
@@ -688,6 +728,7 @@ class BenchmarkCliTests(unittest.TestCase):
         runner_type.assert_called_once_with(
             model_path=str(Path("~/model").expanduser()),
             enforce_eager=False,
+            max_model_len=4096,
             engine_component=config.engine_component,
         )
 

@@ -154,6 +154,7 @@ python benchmarks/benchmark.py \
   --num-requests 256 \
   --input-len 1024 \
   --output-len 256 \
+  --max-model-len 8192 \
   --temperature 0 \
   --repeats 3 \
   --experiment-name baseline
@@ -161,6 +162,9 @@ python benchmarks/benchmark.py \
 
 `temperature: 0` 代表 greedy decoding；正溫度使用 stochastic sampling。
 加入 `--enforce-eager` 可停用 CUDA graph 執行。
+`input_len + output_len` 不得超過 `max_model_len`；engine 也會依模型的
+`max_position_embeddings` 限制 effective value。省略此欄位時預設為 `4096`；
+repository experiment configs 會明確設定為 `8192`。
 
 Benchmark 會顯示 Rich 結果表，並將 JSON 報告寫入 `benchmarks/report/`。
 每份報告包含 workload 總量、時間與吞吐量的 median/minimum/maximum/mean/
@@ -179,6 +183,7 @@ model: ~/huggingface/Qwen3-0.6B/
 num_requests: 256
 input_len: [512, 1024]
 output_len: 256
+max_model_len: 8192
 seed: 0
 temperature: 0
 repeats: 3

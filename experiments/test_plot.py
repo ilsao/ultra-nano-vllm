@@ -192,6 +192,7 @@ class PlotTests(unittest.TestCase):
             old = Path(temp_dir) / "old.json"
             old_config = asdict(config)
             old_config.pop("engine_component")
+            old_config.pop("max_model_len")
             old.write_text(
                 json.dumps(
                     {

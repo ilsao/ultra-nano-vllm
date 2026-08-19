@@ -2,6 +2,7 @@ model: ~/huggingface/Qwen3-0.6B/
 num_requests: 256
 input_len: 1024
 output_len: 1024
+max_model_len: 8192
 seed: 0
 temperature: 0.0
 repeats: 3

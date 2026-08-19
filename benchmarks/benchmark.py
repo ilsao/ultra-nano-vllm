@@ -14,6 +14,7 @@ from experiments.config import (
     DEFAULT_MODEL_PATH,
     validate_experiment_name,
     validate_field_value,
+    validate_workload_lengths,
 )
 from nanovllm import EngineComponent
 from utils.reporter import Reporter
@@ -27,6 +28,7 @@ class BenchmarkConfig:
     num_requests: int = 256
     input_len: int = 1024
     output_len: int = 1024
+    max_model_len: int = 4096
     seed: int = 0
     temperature: float = 0.6
     repeats: int = 3
@@ -64,6 +66,7 @@ def add_benchmark_arguments(
         - num-requests
         - input-len
         - output-len
+        - max-model-len
         - seed
         - temperature
         - repeats
@@ -96,6 +99,12 @@ def add_benchmark_arguments(
         type=int,
         default=default("output_len"),
         help="Exact maximum output length in tokens for every request.",
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=default("max_model_len"),
+        help="Maximum model context length in tokens.",
     )
     parser.add_argument(
         "--seed",
@@ -134,7 +143,14 @@ def parse_args(argv: list[str] | None = None) -> BenchmarkConfig:
     add_benchmark_arguments(parser, include_defaults=True)
     namespace = parser.parse_args(argv)
     try:
-        return BenchmarkConfig(**vars(namespace))
+        config = BenchmarkConfig(**vars(namespace))
+        validate_workload_lengths(
+            config.input_len,
+            config.output_len,
+            config.max_model_len,
+            config.experiment_name,
+        )
+        return config
     except (TypeError, ValueError) as exc:
         parser.error(str(exc))
 
@@ -163,9 +179,16 @@ def execute_benchmark(
     close_runner: bool = False,
 ) -> tuple[metrics.BenchmarkResult, BenchmarkConfiguration]:
     """Measure one scalar benchmark configuration without rendering or saving."""
+    validate_workload_lengths(
+        config.input_len,
+        config.output_len,
+        config.max_model_len,
+        config.experiment_name,
+    )
     runner = BenchmarkRunner(
         model_path=os.path.expanduser(config.model),
         enforce_eager=config.enforce_eager,
+        max_model_len=config.max_model_len,
         engine_component=config.engine_component,
     )
     try:

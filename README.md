@@ -158,6 +158,7 @@ python benchmarks/benchmark.py \
   --num-requests 256 \
   --input-len 1024 \
   --output-len 256 \
+  --max-model-len 8192 \
   --temperature 0 \
   --repeats 3 \
   --experiment-name baseline
@@ -165,6 +166,9 @@ python benchmarks/benchmark.py \
 
 `temperature: 0` selects greedy decoding. Positive temperatures use stochastic
 sampling. Add `--enforce-eager` to disable CUDA graph execution.
+`input_len + output_len` must not exceed `max_model_len`. The engine also caps
+the effective value at the model's `max_position_embeddings`. The field defaults
+to `4096` when omitted; repository experiment configs set it explicitly to `8192`.
 
 The benchmark prints a Rich result table and writes a JSON report under
 `benchmarks/report/`. Each report includes workload totals, median/minimum/
@@ -185,6 +189,7 @@ model: ~/huggingface/Qwen3-0.6B/
 num_requests: 256
 input_len: [512, 1024]
 output_len: 256
+max_model_len: 8192
 seed: 0
 temperature: 0
 repeats: 3
