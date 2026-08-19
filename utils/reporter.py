@@ -140,23 +140,23 @@ class Reporter:
             "tok/s",
         )
 
-        memory = Table.grid(padding=(0, 2))
-        memory.title = "[bold cyan]Memory[/bold cyan]"
-        memory.title_justify = "left"
-        memory.add_column(style="cyan")
-        memory.add_column(justify="right")
-        memory.add_row(
-            "Peak allocated",
-            _format_memory(bench_result.peak_memory_allocated_mib),
+        kvcache = Table.grid(padding=(0, 2))
+        kvcache.title = "[bold cyan]KV Cache[/bold cyan]"
+        kvcache.title_justify = "left"
+        kvcache.add_column(style="cyan")
+        kvcache.add_column(justify="right")
+        kvcache.add_row(
+            "Peak used blocks",
+            f"{bench_result.peak_kvcache_blocks:,} blocks",
         )
-        memory.add_row(
-            "Peak reserved",
-            _format_memory(bench_result.peak_memory_reserved_mib),
+        kvcache.add_row(
+            "Peak utilization",
+            f"{bench_result.peak_kvcache_utilization:.2%}",
         )
 
         self.console.print(
             Panel(
-                Group(config, workload, performance, memory),
+                Group(config, workload, performance, kvcache),
                 title="[bold]Nano-vLLM Offline Benchmark[/bold]",
                 border_style="cyan",
                 box=box.ROUNDED,
@@ -216,12 +216,6 @@ def _format_token_summary(summary: MetricSummary) -> str:
         f"{value} [dim](range {_format_tokens(summary.minimum)} – "
         f"{_format_tokens(summary.maximum)})[/dim]"
     )
-
-
-def _format_memory(mib: float) -> str:
-    if mib < 1024:
-        return f"{mib:,.2f} MiB"
-    return f"{mib / 1024:,.2f} GiB [dim]({mib:,.2f} MiB)[/dim]"
 
 
 def _add_metric_row(

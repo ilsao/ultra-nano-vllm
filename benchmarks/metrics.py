@@ -22,8 +22,8 @@ class BenchmarkResult:
     request_throughput: MetricSummary
     output_throughput: MetricSummary
     total_throughput: MetricSummary
-    peak_memory_allocated_mib: float
-    peak_memory_reserved_mib: float
+    peak_kvcache_blocks: int
+    peak_kvcache_utilization: float
 
 
 def _summarize(values: list[float]) -> MetricSummary:
@@ -47,6 +47,21 @@ def compute_benchmark_result(run_results: list[BatchRunResult]) -> BenchmarkResu
         raise ValueError("all runs must contain the same number of input tokens")
     if any(run.elapsed_time <= 0 for run in run_results):
         raise ValueError("all elapsed times must be greater than zero")
+    if any(run.kvcache_capacity_blocks <= 0 for run in run_results):
+        raise ValueError("KV-cache block capacity must be greater than zero")
+    if any(
+        run.kvcache_capacity_blocks != first.kvcache_capacity_blocks
+        for run in run_results
+    ):
+        raise ValueError("all runs must have the same KV-cache block capacity")
+    if any(
+        run.peak_kvcache_blocks < 0
+        or run.peak_kvcache_blocks > run.kvcache_capacity_blocks
+        for run in run_results
+    ):
+        raise ValueError("peak KV-cache blocks must be within block capacity")
+
+    peak_kvcache_blocks = max(run.peak_kvcache_blocks for run in run_results)
 
     return BenchmarkResult(
         repeats=len(run_results),
@@ -64,10 +79,8 @@ def compute_benchmark_result(run_results: list[BatchRunResult]) -> BenchmarkResu
         total_throughput=_summarize([
             run.total_tokens / run.elapsed_time for run in run_results
         ]),
-        peak_memory_allocated_mib=max(
-            run.peak_memory_allocated_mib for run in run_results
-        ),
-        peak_memory_reserved_mib=max(
-            run.peak_memory_reserved_mib for run in run_results
+        peak_kvcache_blocks=peak_kvcache_blocks,
+        peak_kvcache_utilization=(
+            peak_kvcache_blocks / first.kvcache_capacity_blocks
         ),
     )

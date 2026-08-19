@@ -14,6 +14,7 @@ from nanovllm.engine.block_manager import BlockManager
 from nanovllm.engine.llm_engine import LLMEngine
 from nanovllm.engine.model_runner import ModelRunner
 from nanovllm.engine.scheduler import Scheduler
+from nanovllm.engine.sequence import Sequence
 from nanovllm.layers.attention import Attention, store_kvcache
 from nanovllm.layers.sampler import Sampler
 from nanovllm.models.qwen3 import Qwen3Attention
@@ -68,6 +69,8 @@ class EngineComponentTests(unittest.TestCase):
     def test_loads_hyphenated_file_name(self):
         implementation = """
 class CustomScheduler:
+    def reset_kvcache_metrics(self): pass
+    def get_peak_kvcache_blocks(self): return 0
     def is_finished(self): return True
     def add(self, seq): pass
     def schedule(self): return [], True
@@ -101,6 +104,43 @@ def create_component(**kwargs):
                 scheduler = selections.create_scheduler(config)
 
         self.assertEqual(type(scheduler).__name__, "CustomScheduler")
+
+    def test_block_manager_tracks_distinct_peak_usage_and_resets(self):
+        manager = BlockManager(num_blocks=4, block_size=2)
+        with patch.object(Sequence, "block_size", 2):
+            first = Sequence([1, 2, 3, 4])
+            manager.allocate(first, num_cached_blocks=0)
+            first.num_scheduled_tokens = 4
+            manager.hash_blocks(first)
+
+            self.assertEqual(manager.peak_used_blocks, 2)
+            manager.reset_peak_usage()
+
+            shared = Sequence([1, 2, 3, 4])
+            num_cached_blocks = manager.can_allocate(shared)
+            manager.allocate(shared, num_cached_blocks)
+
+            self.assertEqual(num_cached_blocks, 1)
+            self.assertEqual(len(manager.used_block_ids), 3)
+            self.assertEqual(manager.peak_used_blocks, 3)
+            self.assertEqual(manager.blocks[first.block_table[0]].ref_count, 2)
+
+            manager.deallocate(shared)
+            manager.deallocate(first)
+            self.assertEqual(len(manager.used_block_ids), 0)
+            self.assertEqual(manager.peak_used_blocks, 3)
+
+            manager.reset_peak_usage()
+            self.assertEqual(manager.peak_used_blocks, 0)
+
+            reactivated = Sequence([1, 2, 5, 6])
+            num_cached_blocks = manager.can_allocate(reactivated)
+            manager.allocate(reactivated, num_cached_blocks)
+
+            self.assertEqual(num_cached_blocks, 1)
+            self.assertEqual(manager.blocks[reactivated.block_table[0]].ref_count, 1)
+            self.assertEqual(manager.peak_used_blocks, 2)
+            self.assertLessEqual(manager.peak_used_blocks, len(manager.blocks))
 
     def test_constructor_validates_names_without_loading_implementations(self):
         for selector in ("../scheduler", "scheduler..backup"):
@@ -183,6 +223,23 @@ def create_component(**kwargs):
 
 
 class ComponentInjectionTests(unittest.TestCase):
+    def test_scheduler_delegates_kvcache_metrics_to_block_manager(self):
+        block_manager = Mock(peak_used_blocks=11)
+        scheduler = Scheduler(
+            SimpleNamespace(
+                max_num_seqs=1,
+                max_num_batched_tokens=1,
+                eos=0,
+                kvcache_block_size=1,
+            ),
+            block_manager,
+        )
+
+        scheduler.reset_kvcache_metrics()
+
+        block_manager.reset_peak_usage.assert_called_once_with()
+        self.assertEqual(scheduler.get_peak_kvcache_blocks(), 11)
+
     def test_llm_engine_builds_scheduler_through_engine_component(self):
         components = Mock(spec=EngineComponent)
         components.create_scheduler.return_value = "scheduler"
@@ -212,6 +269,16 @@ class ComponentInjectionTests(unittest.TestCase):
         self.assertIs(config.engine_component, components)
         self.assertIs(engine.scheduler, components.create_scheduler.return_value)
         components.create_scheduler.assert_called_once_with(config)
+
+    def test_llm_engine_delegates_kvcache_metrics_to_scheduler(self):
+        engine = LLMEngine.__new__(LLMEngine)
+        engine.scheduler = Mock()
+        engine.scheduler.get_peak_kvcache_blocks.return_value = 17
+
+        engine.reset_kvcache_metrics()
+
+        engine.scheduler.reset_kvcache_metrics.assert_called_once_with()
+        self.assertEqual(engine.get_peak_kvcache_blocks(), 17)
 
     def test_model_runner_builds_model_and_sampler_from_selection(self):
         components = Mock(spec=EngineComponent)

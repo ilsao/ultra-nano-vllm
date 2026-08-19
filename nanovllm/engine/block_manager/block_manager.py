@@ -30,6 +30,21 @@ class BlockManager:
         self.hash_to_block_id: dict[int, int] = {}
         self.free_block_ids: deque[int] = deque(range(num_blocks))
         self.used_block_ids: set[int] = set()
+        self._peak_used_blocks = 0
+
+    @property
+    def peak_used_blocks(self) -> int:
+        return self._peak_used_blocks
+
+    def reset_peak_usage(self) -> None:
+        """Reset the high-water mark to the current physical block usage."""
+        self._peak_used_blocks = len(self.used_block_ids)
+
+    def _record_peak_usage(self) -> None:
+        self._peak_used_blocks = max(
+            self._peak_used_blocks,
+            len(self.used_block_ids),
+        )
 
     @classmethod
     def compute_hash(cls, token_ids: list[int], prefix: int = -1):
@@ -47,6 +62,7 @@ class BlockManager:
             del self.hash_to_block_id[block.hash]
         block.reset()
         self.used_block_ids.add(block_id)
+        self._record_peak_usage()
         return block_id
 
     def _deallocate_block(self, block_id: int):
@@ -88,6 +104,7 @@ class BlockManager:
             seq.block_table.append(block_id)
         for _ in range(num_cached_blocks, seq.num_blocks):
             seq.block_table.append(self._allocate_block())
+        self._record_peak_usage()
         seq.num_cached_tokens = num_cached_blocks * self.block_size
 
     def deallocate(self, seq: Sequence):

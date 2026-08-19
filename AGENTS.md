@@ -118,8 +118,8 @@ Unless a task explicitly changes an interface, preserve:
 - Independent plotting groups for each YAML file and support for zero, one, or
   two varying parameters.
 - Six comparison plots per plotted group: elapsed time, request throughput,
-  output throughput, total throughput, peak allocated memory, and peak reserved
-  memory.
+  output throughput, total throughput, peak KV-cache blocks, and peak KV-cache
+  utilization.
 
 Validate all experiment groups before starting GPU work. Reject duplicate or
 incomplete parameter grids and configurations with more than two varying

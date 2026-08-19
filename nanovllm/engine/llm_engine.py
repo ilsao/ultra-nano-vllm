@@ -137,6 +137,14 @@ class LLMEngine:
     def is_finished(self):
         return self.scheduler.is_finished()
 
+    def reset_kvcache_metrics(self) -> None:
+        """Reset logical KV-cache usage metrics before a measured run."""
+        self.scheduler.reset_kvcache_metrics()
+
+    def get_peak_kvcache_blocks(self) -> int:
+        """Return the peak number of physical KV blocks used since reset."""
+        return self.scheduler.get_peak_kvcache_blocks()
+
     def generate(
         self,
         prompts: list[str] | list[list[int]],

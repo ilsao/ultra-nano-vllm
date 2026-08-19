@@ -36,7 +36,7 @@ confirmed bottlenecks, and checking optimizations against reproducible baselines
 
 | Benchmark | Experiment | Optimize |
 | --- | --- | --- |
-| Record structured latency, throughput, and GPU-memory measurements. | Isolate scalar, component, and kernel effects with validated YAML grids. | Profile confirmed workloads, replace focused implementations, and compare regressions. |
+| Record structured latency, throughput, and KV-cache occupancy measurements. | Isolate scalar, component, and kernel effects with validated YAML grids. | Profile confirmed workloads, replace focused implementations, and compare regressions. |
 
 > **Research loop:** benchmark → controlled experiment → profiling → optimization → regression comparison
 
@@ -83,7 +83,7 @@ flowchart TD
 | Area | Responsibility |
 | --- | --- |
 | `benchmarks/benchmark.py` | Defines one scalar benchmark configuration and measurement lifecycle. |
-| `benchmarks/runner.py` | Adapts a workload to the LLM API and captures runtime and GPU-memory data. |
+| `benchmarks/runner.py` | Adapts a workload to the LLM API and captures runtime and KV-cache block usage. |
 | `experiments/config.py` | Loads YAML, applies overrides, infers dimensions, and validates grids. |
 | `experiments/sweep.py` | Expands normalized options in deterministic Cartesian-product order. |
 | `experiments/experiment.py` | Orchestrates groups, parent-side reporting, and plot dispatch. |
@@ -168,8 +168,8 @@ sampling. Add `--enforce-eager` to disable CUDA graph execution.
 
 The benchmark prints a Rich result table and writes a JSON report under
 `benchmarks/report/`. Each report includes workload totals, median/minimum/
-maximum timing and throughput values, and peak allocated and reserved GPU
-memory.
+maximum timing and throughput values, peak used KV-cache blocks, and peak
+KV-cache utilization.
 
 <a id="experiments"></a>
 
@@ -242,7 +242,7 @@ Reports and PNG plots are written to `experiments/report/`:
   cells also show min/max values.
 
 The six plotted metrics are elapsed time, request throughput, output throughput,
-total throughput, peak allocated GPU memory, and peak reserved GPU memory.
+total throughput, peak KV-cache blocks, and peak KV-cache utilization.
 
 Existing experiment reports can be plotted again without running the model:
 
@@ -253,7 +253,8 @@ python experiments/experiment.py --plot-only \
 ```
 
 Only the explicitly listed reports form the plotting group. They must contain
-compatible `experiment_config` and result payloads.
+compatible `experiment_config` and result payloads. Reports containing only the
+legacy GPU allocator peak fields must be regenerated before using plot-only mode.
 
 <a id="pluggable-design"></a>
 

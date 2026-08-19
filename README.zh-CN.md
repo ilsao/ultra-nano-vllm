@@ -36,7 +36,7 @@ Ultra-Nano-vLLM 是一个以
 
 | Benchmark | Experiment | Optimize |
 | --- | --- | --- |
-| 记录结构化的延迟、吞吐量与 GPU 内存测量。 | 通过已验证的 YAML 网格隔离 scalar、component 与 kernel 的影响。 | Profile 已确认的 workload、替换聚焦的实现并比较 regression。 |
+| 记录结构化的延迟、吞吐量与 KV-cache 使用量测量。 | 通过已验证的 YAML 网格隔离 scalar、component 与 kernel 的影响。 | Profile 已确认的 workload、替换聚焦的实现并比较 regression。 |
 
 > **研究循环：** benchmark → controlled experiment → profiling → optimization → regression comparison
 
@@ -82,7 +82,7 @@ flowchart TD
 | 区域 | 职责 |
 | --- | --- |
 | `benchmarks/benchmark.py` | 定义单次 scalar benchmark config 与测量生命周期。 |
-| `benchmarks/runner.py` | 将 workload 接至 LLM API，并采集 runtime 与 GPU 内存数据。 |
+| `benchmarks/runner.py` | 将 workload 接至 LLM API，并采集 runtime 与 KV-cache block 使用量。 |
 | `experiments/config.py` | 加载 YAML、应用 override、推断维度并验证网格。 |
 | `experiments/sweep.py` | 按确定性的笛卡尔积顺序展开规范化选项。 |
 | `experiments/experiment.py` | 编排分组、parent-side reporting 与 plot dispatch。 |
@@ -163,8 +163,8 @@ python benchmarks/benchmark.py \
 添加 `--enforce-eager` 可禁用 CUDA graph 执行。
 
 Benchmark 会显示 Rich 结果表，并将 JSON 报告写入 `benchmarks/report/`。
-每份报告包含 workload 总量、时间与吞吐量的 median/minimum/maximum，
-以及 GPU peak allocated 与 peak reserved memory。
+每份报告包含 workload 总量、时间与吞吐量的 median/minimum/maximum、
+KV-cache peak used blocks 与 peak utilization。
 
 <a id="experiments"></a>
 
@@ -231,7 +231,7 @@ cached allocation 或 NCCL process-group state 泄漏至下一次测量。
 - 2 个变化维度：生成六张标注 median 的 heatmap；时间与吞吐量 cell 也会显示 min/max。
 
 六项绘图指标为 elapsed time、request throughput、output throughput、total throughput、
-peak allocated GPU memory 与 peak reserved GPU memory。
+peak KV-cache blocks 与 peak KV-cache utilization。
 
 可以只使用现有 experiment 报告重新绘图，而不运行模型：
 
@@ -242,6 +242,7 @@ python experiments/experiment.py --plot-only \
 ```
 
 只有明确列出的报告会组成该绘图组，且必须包含兼容的 `experiment_config` 与 result payload。
+仅包含旧版 GPU allocator peak 字段的报告，必须重新运行实验后才能用于 plot-only mode。
 
 <a id="pluggable-design"></a>
 
