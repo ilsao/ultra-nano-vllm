@@ -1,0 +1,16 @@
+model: ~/huggingface/Qwen3-0.6B/
+num_requests: 256
+input_len: [256, 512, 1024, 2048, 4096]
+output_len: 1024
+seed: 0
+temperature: 0.0
+repeats: 2
+
+enforce_eager: false
+
+experiment_name: 
+  - baseline-input-256
+  - baseline-input-512
+  - baseline-input-1024
+  - baseline-input-2048
+  - baseline-input-4096

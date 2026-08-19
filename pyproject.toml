@@ -13,7 +13,9 @@ description = "a lightweight vLLM implementation built from scratch"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "flash-attn>=2.8.3,<2.9",
+    "matplotlib",
     "numpy",
+    "PyYAML>=6.0",
     "rich",
     "safetensors",
     "torch>=2.4.0,<2.9",
@@ -28,4 +30,7 @@ Homepage="https://github.com/GeeeekExplorer/nano-vllm"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["benchmarks*", "nanovllm*"]
+include = ["benchmarks*", "experiments*", "nanovllm*", "utils*"]
+
+[tool.setuptools.package-data]
+experiments = ["configs/*.yaml"]

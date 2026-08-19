@@ -63,6 +63,10 @@ class BenchmarkRunner:
             num_kvcache_blocks=config.num_kvcache_blocks,
         )
 
+    def close(self) -> None:
+        """Release the underlying engine and its distributed CUDA resources."""
+        self.llm.exit()
+
     def warmup(self, warmup_requests: list[BenchmarkRequest]) -> None:
         if not warmup_requests:
             raise ValueError("warmup_requests must not be empty")

@@ -10,15 +10,17 @@ import unittest
 from unittest.mock import MagicMock, Mock, call, patch
 
 from nanovllm import SamplingParams
+from nanovllm.engine.llm_engine import LLMEngine
 from rich.console import Console
 
 from benchmarks import benchmark as benchmark_cli
-from benchmarks import metrics, reporter, workloads
+from benchmarks import metrics, workloads
 from benchmarks.runner import (
     BatchRunResult,
     BenchmarkConfiguration,
     BenchmarkRunner,
 )
+from utils import reporter
 
 
 class BenchmarkCliArgumentTests(unittest.TestCase):
@@ -36,34 +38,33 @@ class BenchmarkCliArgumentTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("Benchmark offline LLM throughput.", completed.stdout)
 
-    def test_serving_system_name_defaults_to_nano_vllm(self):
+    def test_experiment_name_defaults_to_nano_vllm(self):
         with patch("sys.argv", ["benchmark.py"]):
             args = benchmark_cli.parse_args()
 
-        self.assertEqual(args.serving_system_name, "nano-vllm")
+        self.assertEqual(args.experiment_name, "nano-vllm")
 
-    def test_accepts_custom_serving_system_name(self):
+    def test_accepts_custom_experiment_name(self):
         with patch(
             "sys.argv",
-            ["benchmark.py", "--serving-system-name", "custom.vllm_2"],
+            ["benchmark.py", "--experiment-name", "custom.vllm_2"],
         ):
             args = benchmark_cli.parse_args()
 
-        self.assertEqual(args.serving_system_name, "custom.vllm_2")
+        self.assertEqual(args.experiment_name, "custom.vllm_2")
 
-    def test_rejects_unsafe_serving_system_name(self):
+    def test_rejects_unsafe_experiment_name(self):
         for name in ["", "../vllm", "vllm/name", r"vllm\name", "vllm name"]:
             with (
                 self.subTest(name=name),
                 patch(
                     "sys.argv",
-                    ["benchmark.py", "--serving-system-name", name],
+                    ["benchmark.py", "--experiment-name", name],
                 ),
                 patch("sys.stderr", new=StringIO()),
                 self.assertRaises(SystemExit),
             ):
                 benchmark_cli.parse_args()
-
 
 class SyntheticWorkloadTests(unittest.TestCase):
     def test_fixed_lengths_vocab_range_and_seed(self):
@@ -101,6 +102,13 @@ class SyntheticWorkloadTests(unittest.TestCase):
         workloads.synthetic_workload(1, 1, 1, 0, 0.6, 10, 2)
         self.assertEqual(random.getstate(), state)
 
+    def test_supports_zero_temperature_for_greedy_decoding(self):
+        requests = workloads.synthetic_workload(2, 1, 1, 0, 0.0, 10, 2)
+
+        self.assertTrue(
+            all(request.sampling_params.temperature == 0 for request in requests)
+        )
+
     def test_rejects_invalid_arguments(self):
         valid = dict(
             num_requests=1,
@@ -115,7 +123,7 @@ class SyntheticWorkloadTests(unittest.TestCase):
             "num_requests": 0,
             "input_len": 0,
             "output_len": 0,
-            "temperature": 0.0,
+            "temperature": -1.0,
             "vocab_size": 0,
             "max_model_len": 0,
         }
@@ -214,6 +222,36 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(result.peak_memory_allocated_mib, 4.0)
         self.assertEqual(result.peak_memory_reserved_mib, 6.0)
 
+    def test_close_shuts_down_underlying_engine(self):
+        runner = BenchmarkRunner.__new__(BenchmarkRunner)
+        runner.llm = Mock()
+
+        runner.close()
+
+        runner.llm.exit.assert_called_once_with()
+
+
+class LLMEngineLifecycleTests(unittest.TestCase):
+    def test_exit_is_idempotent_and_releases_workers(self):
+        engine = LLMEngine.__new__(LLMEngine)
+        engine._closed = False
+        model_runner = Mock()
+        engine.model_runner = model_runner
+        process = Mock()
+        engine.ps = [process]
+        engine.events = [Mock()]
+
+        with patch("nanovllm.engine.llm_engine.atexit.unregister") as unregister:
+            engine.exit()
+            engine.exit()
+
+        unregister.assert_called_once_with(engine.exit)
+        model_runner.call.assert_called_once_with("exit")
+        process.join.assert_called_once_with()
+        self.assertFalse(hasattr(engine, "model_runner"))
+        self.assertEqual(engine.ps, [])
+        self.assertEqual(engine.events, [])
+
 
 class MetricsTests(unittest.TestCase):
     def test_aggregates_median_range_and_peak_memory(self):
@@ -247,7 +285,20 @@ class ReporterTests(unittest.TestCase):
     def test_default_report_dir_is_under_benchmarks(self):
         self.assertEqual(
             reporter.REPORT_DIR,
-            Path(reporter.__file__).resolve().parent / "report",
+            Path(reporter.__file__).resolve().parent.parent / "benchmarks" / "report",
+        )
+
+    def test_displays_generated_plot_paths(self):
+        console = Mock()
+        paths = [Path("first.png"), Path("second.png")]
+
+        reporter.Reporter(console=console).show_plot_paths(paths)
+
+        console.print.assert_has_calls(
+            [
+                call("[bold green]✓[/] Plot saved to [cyan]first.png[/cyan]"),
+                call("[bold green]✓[/] Plot saved to [cyan]second.png[/cyan]"),
+            ]
         )
 
     def test_renders_grouped_plain_text_without_ansi_codes(self):
@@ -283,7 +334,7 @@ class ReporterTests(unittest.TestCase):
             width=110,
         )
 
-        reporter.BenchmarkReporter(console=console).show_result(result, configuration)
+        reporter.Reporter(console=console).show_result(result, configuration)
         rendered = output.getvalue()
 
         self.assertIn("Configuration", rendered)
@@ -314,11 +365,11 @@ class ReporterTests(unittest.TestCase):
         progress.__enter__.return_value = active_progress
 
         with patch(
-            "benchmarks.reporter.Progress",
+            "utils.reporter.Progress",
             return_value=progress,
         ) as progress_type:
             run_indexes = list(
-                reporter.BenchmarkReporter(console=console).track_repeats(3)
+                reporter.Reporter(console=console).track_repeats(3)
             )
 
         self.assertEqual(run_indexes, [0, 1, 2])
@@ -360,13 +411,13 @@ class ReporterTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             report_dir = Path(temp_dir) / "report"
             with (
-                patch("benchmarks.reporter.REPORT_DIR", report_dir),
+                patch("utils.reporter.REPORT_DIR", report_dir),
                 patch(
-                    "benchmarks.reporter._report_timestamp",
+                    "utils.reporter._report_timestamp",
                     return_value="2026-08-18-203045",
                 ),
             ):
-                report_path = reporter.BenchmarkReporter(console=console).save_result(
+                report_path = reporter.Reporter(console=console).save_result(
                     result,
                     configuration,
                     "custom-vllm",
@@ -378,7 +429,7 @@ class ReporterTests(unittest.TestCase):
             )
             report = json.loads(report_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(report["serving_system_name"], "custom-vllm")
+        self.assertEqual(report["experiment_name"], "custom-vllm")
         self.assertEqual(report["configuration"]["model"], "Qwen3-0.6B")
         self.assertEqual(report["configuration"]["gpu_memory_utilization"], 0.9)
         self.assertEqual(report["result"]["repeats"], 3)
@@ -391,13 +442,54 @@ class ReporterTests(unittest.TestCase):
             f"[bold green]✓[/] Report saved to [cyan]{report_path}[/cyan]"
         )
 
+    def test_saves_experiment_config_to_explicit_path(self):
+        configuration = BenchmarkConfiguration(
+            model="Qwen3-0.6B",
+            device="GPU",
+            dtype="bfloat16",
+            tensor_parallel_size=1,
+            enforce_eager=False,
+            block_size=256,
+            max_model_len=4096,
+            gpu_memory_utilization=0.9,
+            num_kvcache_blocks=100,
+        )
+        result = metrics.compute_benchmark_result([
+            BatchRunResult(1.0, 1, 2, 3, 5, 4.0, 6.0)
+        ])
+        experiment_config = benchmark_cli.BenchmarkConfig(
+            num_requests=1,
+            input_len=2,
+            output_len=3,
+            seed=7,
+            temperature=0.8,
+            repeats=1,
+            experiment_name="sweep-one",
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "nested" / "sweep.json"
+            saved_path = reporter.Reporter(console=Mock()).save_result(
+                result,
+                configuration,
+                "sweep-one",
+                output_path=output_path,
+                experiment_config=experiment_config,
+            )
+            report = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved_path, output_path)
+        self.assertEqual(report["experiment_config"]["input_len"], 2)
+        self.assertEqual(report["experiment_config"]["temperature"], 0.8)
+        self.assertEqual(report["configuration"]["model"], "Qwen3-0.6B")
+
 
 class BenchmarkCliTests(unittest.TestCase):
-    def test_delegates_terminal_output_to_reporter(self):
-        args = SimpleNamespace(
+    def test_execute_benchmark_runs_warmup_repeats_and_metrics(self):
+        config = benchmark_cli.BenchmarkConfig(
             model="~/model",
             enforce_eager=False,
-            serving_system_name="nano-vllm",
+            experiment_name="nano-vllm",
             seed=4,
             repeats=3,
             num_requests=2,
@@ -410,8 +502,6 @@ class BenchmarkCliTests(unittest.TestCase):
         aggregate = Mock()
 
         with (
-            patch("benchmarks.benchmark.parse_args", return_value=args),
-            patch("benchmarks.benchmark.BenchmarkReporter", return_value=reporter),
             patch("benchmarks.benchmark.BenchmarkRunner", return_value=runner),
             patch("benchmarks.benchmark.make_workload", return_value=["request"]),
             patch(
@@ -419,17 +509,80 @@ class BenchmarkCliTests(unittest.TestCase):
                 return_value=aggregate,
             ),
         ):
-            benchmark_cli.main()
+            result, configuration = benchmark_cli.execute_benchmark(config, reporter)
 
         self.assertEqual(runner.run_benchmark.call_count, 3)
         reporter.warmup.assert_called_once_with()
         reporter.warmup_complete.assert_called_once_with()
         reporter.track_repeats.assert_called_once_with(3)
-        reporter.show_result.assert_called_once_with(aggregate, runner.configuration)
+        self.assertIs(result, aggregate)
+        self.assertIs(configuration, runner.configuration)
+        runner.close.assert_not_called()
+
+    def test_execute_benchmark_closes_opt_in_runner_after_success(self):
+        config = benchmark_cli.BenchmarkConfig(repeats=1, num_requests=1)
+        reporter = Mock()
+        reporter.warmup.return_value = MagicMock()
+        reporter.track_repeats.return_value = range(1)
+        runner = Mock()
+        runner.run_benchmark.return_value = "run"
+
+        with (
+            patch("benchmarks.benchmark.BenchmarkRunner", return_value=runner),
+            patch("benchmarks.benchmark.make_workload", return_value=["request"]),
+            patch(
+                "benchmarks.benchmark.metrics.compute_benchmark_result",
+                return_value="aggregate",
+            ),
+        ):
+            result, configuration = benchmark_cli.execute_benchmark(
+                config,
+                reporter,
+                close_runner=True,
+            )
+
+        self.assertEqual(result, "aggregate")
+        self.assertIs(configuration, runner.configuration)
+        runner.close.assert_called_once_with()
+
+    def test_execute_benchmark_closes_opt_in_runner_after_failure(self):
+        config = benchmark_cli.BenchmarkConfig()
+        reporter = Mock()
+        reporter.warmup.return_value = MagicMock()
+        runner = Mock()
+        runner.warmup.side_effect = RuntimeError("warmup failed")
+
+        with (
+            patch("benchmarks.benchmark.BenchmarkRunner", return_value=runner),
+            patch("benchmarks.benchmark.make_workload", return_value=["request"]),
+            self.assertRaisesRegex(RuntimeError, "warmup failed"),
+        ):
+            benchmark_cli.execute_benchmark(
+                config,
+                reporter,
+                close_runner=True,
+            )
+
+        runner.close.assert_called_once_with()
+
+    def test_main_delegates_rendering_and_saving_to_reporter(self):
+        config = benchmark_cli.BenchmarkConfig(experiment_name="single")
+        reporter = Mock()
+
+        with (
+            patch("benchmarks.benchmark.parse_args", return_value=config),
+            patch("benchmarks.benchmark.Reporter", return_value=reporter),
+            patch(
+                "benchmarks.benchmark.execute_benchmark",
+                return_value=("aggregate", "engine"),
+            ) as execute,
+        ):
+            benchmark_cli.main()
+
+        execute.assert_called_once_with(config, reporter)
+        reporter.show_result.assert_called_once_with("aggregate", "engine")
         reporter.save_result.assert_called_once_with(
-            aggregate,
-            runner.configuration,
-            "nano-vllm",
+            "aggregate", "engine", "single"
         )
 
 
