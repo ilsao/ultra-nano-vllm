@@ -168,7 +168,7 @@ python benchmarks/benchmark.py \
 sampling. Add `--enforce-eager` to disable CUDA graph execution.
 `input_len + output_len` must not exceed `max_model_len`. The engine also caps
 the effective value at the model's `max_position_embeddings`. The field defaults
-to `4096` when omitted; repository experiment configs set it explicitly to `8192`.
+to `8192` when omitted; repository experiment configs also set it explicitly.
 
 The benchmark prints a Rich result table and writes a JSON report under
 `benchmarks/report/`. Each report includes workload totals, median/minimum/
@@ -223,6 +223,21 @@ python experiments/experiment.py \
   --config experiments/configs/baseline-input-sweeps.yaml \
   --config experiments/configs/baseline-output-sweeps.yaml
 ```
+
+### Shipped baseline suite
+
+The repository baseline uses greedy decoding, CUDA graphs, `max_model_len: 8192`,
+and seven measured repeats per point. Shorter sequences keep the suite practical,
+while the final point of each sweep is expected to saturate the logical KV cache.
+
+| Config | Fixed workload | Sweep values |
+| --- | --- | --- |
+| `baseline-req-sweeps.yaml` | input 256, output 256 | requests: 16, 32, 64, 128, 256 |
+| `baseline-input-sweeps.yaml` | 64 requests, output 256 | input: 128, 256, 512, 1024, 2048 |
+| `baseline-output-sweeps.yaml` | 128 requests, input 256 | output: 64, 128, 256, 512, 768 |
+
+Reports produced by the earlier 4096-context workloads remain useful as
+historical characterization, but should not be mixed into a new baseline plot.
 
 Benchmark CLI options can override scalar YAML values for the invocation:
 

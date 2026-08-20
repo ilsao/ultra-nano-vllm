@@ -9,6 +9,7 @@ import torch
 from torch import nn
 
 from nanovllm import EngineComponent
+from nanovllm.config import Config as EngineConfig
 from nanovllm.engine import component
 from nanovllm.engine.block_manager import BlockManager
 from nanovllm.engine.llm_engine import LLMEngine
@@ -28,6 +29,34 @@ class _FakeAttention(nn.Module):
 
     def forward(self, q, k, v):
         return q
+
+
+class EngineConfigTests(unittest.TestCase):
+    def test_defaults_to_8192_when_supported_by_model(self):
+        hf_config = SimpleNamespace(max_position_embeddings=16384)
+        with (
+            TemporaryDirectory() as model_dir,
+            patch(
+                "nanovllm.config.AutoConfig.from_pretrained",
+                return_value=hf_config,
+            ),
+        ):
+            config = EngineConfig(model_dir)
+
+        self.assertEqual(config.max_model_len, 8192)
+
+    def test_clamps_default_to_model_context_limit(self):
+        hf_config = SimpleNamespace(max_position_embeddings=4096)
+        with (
+            TemporaryDirectory() as model_dir,
+            patch(
+                "nanovllm.config.AutoConfig.from_pretrained",
+                return_value=hf_config,
+            ),
+        ):
+            config = EngineConfig(model_dir)
+
+        self.assertEqual(config.max_model_len, 4096)
 
 
 class EngineComponentTests(unittest.TestCase):

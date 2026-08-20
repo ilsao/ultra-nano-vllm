@@ -31,7 +31,7 @@ class Config:
     num_requests: tuple[int, ...] = (256,)
     input_len: tuple[int, ...] = (1024,)
     output_len: tuple[int, ...] = (1024,)
-    max_model_len: tuple[int, ...] = (4096,)
+    max_model_len: tuple[int, ...] = (8192,)
     seed: tuple[int, ...] = (0,)
     temperature: tuple[float, ...] = (0.6,)
     repeats: tuple[int, ...] = (3,)

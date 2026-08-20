@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+import numpy as np
+
 from benchmarks.benchmark import BenchmarkConfig
 from benchmarks.metrics import BenchmarkResult, MetricSummary
 from experiments.config import CONFIG_DIMENSIONS
@@ -119,6 +121,115 @@ class PlotTests(unittest.TestCase):
                 any("prefill-throughput" in path.name for path in paths)
             )
             self.assertTrue(any("decode-time" in path.name for path in paths))
+
+    def test_orders_numeric_axes_and_preserves_categorical_order(self):
+        integer_records = [
+            PlotRecord(
+                BenchmarkConfig(
+                    num_requests=value,
+                    experiment_name=f"requests-{value}",
+                ),
+                make_result(float(value)),
+            )
+            for value in (128, 16, 64, 32)
+        ]
+        float_records = [
+            PlotRecord(
+                BenchmarkConfig(
+                    temperature=value,
+                    experiment_name=f"temperature-{index}",
+                ),
+                make_result(float(index + 1)),
+            )
+            for index, value in enumerate((0.6, 0.1, 0.3))
+        ]
+        string_records = [
+            PlotRecord(
+                BenchmarkConfig(model=value, experiment_name=f"model-{index}"),
+                make_result(float(index + 1)),
+            )
+            for index, value in enumerate(("model-z", "model-a", "model-m"))
+        ]
+        boolean_records = [
+            PlotRecord(
+                BenchmarkConfig(
+                    enforce_eager=value,
+                    experiment_name=f"eager-{index}",
+                ),
+                make_result(float(index + 1)),
+            )
+            for index, value in enumerate((True, False))
+        ]
+
+        self.assertEqual(
+            plot._ordered_values(integer_records, "num_requests"),
+            [16, 32, 64, 128],
+        )
+        self.assertEqual(
+            plot._ordered_values(float_records, "temperature"),
+            [0.1, 0.3, 0.6],
+        )
+        self.assertEqual(
+            plot._ordered_values(string_records, "model"),
+            ["model-z", "model-a", "model-m"],
+        )
+        self.assertEqual(
+            plot._ordered_values(boolean_records, "enforce_eager"),
+            [True, False],
+        )
+
+    def test_plot_2d_sorts_numeric_axes_without_moving_results(self):
+        from matplotlib.axes import Axes
+
+        records = [
+            PlotRecord(
+                BenchmarkConfig(
+                    num_requests=requests,
+                    temperature=temperature,
+                    experiment_name=f"run-{index}",
+                ),
+                make_result(value),
+            )
+            for index, (requests, temperature, value) in enumerate(
+                (
+                    (2, 0.2, 22.0),
+                    (1, 0.2, 12.0),
+                    (2, 0.1, 21.0),
+                    (1, 0.1, 11.0),
+                )
+            )
+        ]
+        matrices = []
+        original_imshow = Axes.imshow
+
+        def capture_matrix(axis, matrix, *args, **kwargs):
+            matrices.append(np.array(matrix, copy=True))
+            return original_imshow(axis, matrix, *args, **kwargs)
+
+        with TemporaryDirectory() as temp_dir, patch.object(
+            plot, "_METRICS", (plot._METRICS[0],)
+        ), patch.object(Axes, "imshow", autospec=True, side_effect=capture_matrix):
+            paths = plot_2d(
+                records,
+                "num_requests",
+                "temperature",
+                output_dir=temp_dir,
+                plot_name="numeric axes",
+            )
+
+        self.assertEqual(len(paths), 1)
+        self.assertEqual(
+            plot._ordered_values(records, "num_requests"),
+            [1, 2],
+        )
+        self.assertEqual(
+            plot._ordered_values(records, "temperature"),
+            [0.1, 0.2],
+        )
+        np.testing.assert_array_equal(
+            matrices[0],
+            np.array([[11.1, 21.1], [12.1, 22.1]]),
+        )
 
     def test_plot_2d_supports_categorical_axes_and_saves_all_files(self):
         records = []

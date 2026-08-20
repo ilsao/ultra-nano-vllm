@@ -23,7 +23,7 @@ class ConfigTests(unittest.TestCase):
                 num_requests=(256,),
                 input_len=(1024,),
                 output_len=(1024,),
-                max_model_len=(4096,),
+                max_model_len=(8192,),
                 seed=(0,),
                 temperature=(0.6,),
                 repeats=(3,),
@@ -78,29 +78,25 @@ class ConfigTests(unittest.TestCase):
         paths = sorted(config_dir.glob("*.yaml"))
         groups = resolve_config_groups(paths)
         expected = {
-            "baseline-eager-comparison": (
-                ("enforce_eager",),
-                ("baseline-cuda-graph", "baseline-eager"),
-            ),
             "baseline-input-sweeps": (
                 ("input_len",),
                 tuple(
                     f"baseline-input-{value}"
-                    for value in (256, 512, 1024, 2048, 4096)
+                    for value in (128, 256, 512, 1024, 2048)
                 ),
             ),
             "baseline-output-sweeps": (
                 ("output_len",),
                 tuple(
                     f"baseline-output-{value}"
-                    for value in (256, 512, 1024, 2048, 4096)
+                    for value in (64, 128, 256, 512, 768)
                 ),
             ),
             "baseline-req-sweeps": (
                 ("num_requests",),
                 tuple(
                     f"baseline-req-{value}"
-                    for value in (32, 64, 128, 256, 512)
+                    for value in (16, 32, 64, 128, 256)
                 ),
             ),
         }
@@ -115,8 +111,32 @@ class ConfigTests(unittest.TestCase):
             },
             expected,
         )
+        by_name = {group.name: group.configs for group in groups}
+        self.assertEqual(
+            [
+                (config.num_requests, config.input_len, config.output_len)
+                for config in by_name["baseline-req-sweeps"]
+            ],
+            [(value, 256, 256) for value in (16, 32, 64, 128, 256)],
+        )
+        self.assertEqual(
+            [
+                (config.num_requests, config.input_len, config.output_len)
+                for config in by_name["baseline-input-sweeps"]
+            ],
+            [(64, value, 256) for value in (128, 256, 512, 1024, 2048)],
+        )
+        self.assertEqual(
+            [
+                (config.num_requests, config.input_len, config.output_len)
+                for config in by_name["baseline-output-sweeps"]
+            ],
+            [(128, 256, value) for value in (64, 128, 256, 512, 768)],
+        )
         configs = [config for group in groups for config in group.configs]
-        self.assertTrue(configs, "expected at least one repository experiment config")
+        self.assertEqual(len(configs), 15)
+        self.assertTrue(all(config.repeats == 7 for config in configs))
+        self.assertTrue(all(not config.enforce_eager for config in configs))
         self.assertTrue(all(config.max_model_len == 8192 for config in configs))
         self.assertTrue(
             all(

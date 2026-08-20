@@ -43,6 +43,7 @@ class BenchmarkCliArgumentTests(unittest.TestCase):
             args = benchmark_cli.parse_args()
 
         self.assertEqual(args.experiment_name, "nano-vllm")
+        self.assertEqual(args.max_model_len, 8192)
 
     def test_accepts_custom_experiment_name(self):
         with patch(
@@ -83,6 +84,8 @@ class BenchmarkCliArgumentTests(unittest.TestCase):
                     "4096",
                     "--output-len",
                     "1024",
+                    "--max-model-len",
+                    "4096",
                 ],
             ),
             patch("sys.stderr", new=StringIO()),
@@ -191,7 +194,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
         llm.assert_called_once_with(
             "/models/Qwen3-0.6B/",
             enforce_eager=False,
-            max_model_len=4096,
+            max_model_len=8192,
             engine_component=components,
         )
 
@@ -728,7 +731,7 @@ class BenchmarkCliTests(unittest.TestCase):
         runner_type.assert_called_once_with(
             model_path=str(Path("~/model").expanduser()),
             enforce_eager=False,
-            max_model_len=4096,
+            max_model_len=8192,
             engine_component=config.engine_component,
         )
 

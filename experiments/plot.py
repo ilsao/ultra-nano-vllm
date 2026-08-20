@@ -446,6 +446,11 @@ def _ordered_values(records: Sequence[PlotRecord], dimension: str) -> list[objec
         value = _dimension_value(record, dimension)
         if value not in values:
             values.append(value)
+    if all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in values
+    ):
+        values.sort()
     return values
 
 

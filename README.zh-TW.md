@@ -163,8 +163,8 @@ python benchmarks/benchmark.py \
 `temperature: 0` 代表 greedy decoding；正溫度使用 stochastic sampling。
 加入 `--enforce-eager` 可停用 CUDA graph 執行。
 `input_len + output_len` 不得超過 `max_model_len`；engine 也會依模型的
-`max_position_embeddings` 限制 effective value。省略此欄位時預設為 `4096`；
-repository experiment configs 會明確設定為 `8192`。
+`max_position_embeddings` 限制 effective value。省略此欄位時預設為 `8192`；
+repository experiment configs 也會明確設定此值。
 
 Benchmark 會顯示 Rich 結果表，並將 JSON 報告寫入 `benchmarks/report/`。
 每份報告包含 workload 總量、時間與吞吐量的 median/minimum/maximum/mean/
@@ -215,6 +215,21 @@ python experiments/experiment.py \
   --config experiments/configs/baseline-input-sweeps.yaml \
   --config experiments/configs/baseline-output-sweeps.yaml
 ```
+
+### Shipped Baseline Suite
+
+Repository baseline 使用 greedy decoding、CUDA graphs、`max_model_len: 8192`，
+且每個點執行七次 measured repeats。較短的 sequence 讓完整 suite 保持可執行，
+每個 sweep 的最後一點則預期會使 logical KV cache 飽和。
+
+| Config | 固定 workload | Sweep values |
+| --- | --- | --- |
+| `baseline-req-sweeps.yaml` | input 256、output 256 | requests：16、32、64、128、256 |
+| `baseline-input-sweeps.yaml` | 64 requests、output 256 | input：128、256、512、1024、2048 |
+| `baseline-output-sweeps.yaml` | 128 requests、input 256 | output：64、128、256、512、768 |
+
+先前以 4096 context 產生的報告仍可作為歷史 characterization，但不應混入新的
+baseline plot。
 
 Benchmark CLI option 可以在該次執行中覆寫 YAML 的 scalar value：
 

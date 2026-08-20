@@ -42,7 +42,7 @@ class BenchmarkRunner:
         self,
         model_path: str,
         enforce_eager: bool = False,
-        max_model_len: int = 4096,
+        max_model_len: int = 8192,
         engine_component: EngineComponent | None = None,
     ):
         self.llm = LLM(
