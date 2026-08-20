@@ -2,6 +2,7 @@ import torch
 import triton
 import triton.language as tl
 
+from utils.profiling import nvtx_annotate
 
 @triton.jit
 def store_kvcache_kernel(
@@ -26,7 +27,7 @@ def store_kvcache_kernel(
     tl.store(k_cache_ptr + cache_offsets, key)
     tl.store(v_cache_ptr + cache_offsets, value)
 
-
+@nvtx_annotate("store_kvcache")
 def store_kvcache(
     key: torch.Tensor,
     value: torch.Tensor,

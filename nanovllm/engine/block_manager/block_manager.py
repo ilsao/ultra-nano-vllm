@@ -5,6 +5,7 @@ import xxhash
 
 from nanovllm.engine.sequence import Sequence
 
+from utils.profiling import nvtx_annotate
 
 class Block:
     def __init__(self, block_id):
@@ -87,6 +88,7 @@ class BlockManager:
             return -1
         return num_cached_blocks
 
+    @nvtx_annotate("BlockManager.allocate")
     def allocate(self, seq: Sequence, num_cached_blocks: int):
         assert not seq.block_table
         h = -1
@@ -107,6 +109,7 @@ class BlockManager:
         self._record_peak_usage()
         seq.num_cached_tokens = num_cached_blocks * self.block_size
 
+    @nvtx_annotate("BlockManager.deallocate")
     def deallocate(self, seq: Sequence):
         for block_id in reversed(seq.block_table):
             block = self.blocks[block_id]

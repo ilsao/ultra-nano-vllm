@@ -11,6 +11,7 @@ from nanovllm.sampling_params import SamplingParams
 from nanovllm.engine.sequence import Sequence
 from nanovllm.engine.model_runner import ModelRunner
 
+from utils.profiling import nvtx_annotate
 
 @dataclass(frozen=True, slots=True)
 class GenerationMetrics:

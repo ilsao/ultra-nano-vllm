@@ -6,6 +6,7 @@ from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
 from nanovllm.utils.context import get_context
 
+from utils.profiling import nvtx_annotate
 
 class Attention(nn.Module):
     def __init__(
@@ -24,6 +25,7 @@ class Attention(nn.Module):
         self.store_kvcache = store_kvcache
         self.k_cache = self.v_cache = torch.tensor([])
 
+    @nvtx_annotate("Attention.forward")
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         context = get_context()
         k_cache, v_cache = self.k_cache, self.v_cache
