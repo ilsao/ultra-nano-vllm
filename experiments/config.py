@@ -31,6 +31,7 @@ class Config:
     num_requests: tuple[int, ...] = (256,)
     input_len: tuple[int, ...] = (1024,)
     output_len: tuple[int, ...] = (1024,)
+    max_model_len: tuple[int, ...] = (8192,)
     seed: tuple[int, ...] = (0,)
     temperature: tuple[float, ...] = (0.6,)
     repeats: tuple[int, ...] = (3,)
@@ -105,6 +106,7 @@ _FIELD_TYPES: dict[str, type] = {
     "num_requests": int,
     "input_len": int,
     "output_len": int,
+    "max_model_len": int,
     "seed": int,
     "temperature": float,
     "repeats": int,
@@ -145,6 +147,13 @@ def resolve_config_groups(
     all_configs = []
     for group_index, (path, configs) in enumerate(expanded_groups, start=1):
         resolved = tuple(replace(config, **replacements) for config in configs)
+        for config in resolved:
+            validate_workload_lengths(
+                config.input_len,
+                config.output_len,
+                config.max_model_len,
+                config.experiment_name,
+            )
         dimensions = validate_config_grid(resolved)
         group_name = path.stem
         if sum(candidate.stem == path.stem for candidate, _ in expanded_groups) > 1:
@@ -229,6 +238,23 @@ def validate_experiment_name(value: str) -> str:
     return value
 
 
+def validate_workload_lengths(
+    input_len: int,
+    output_len: int,
+    max_model_len: int,
+    experiment_name: str,
+) -> None:
+    """Reject workloads that exceed their requested model context length."""
+    total_len = input_len + output_len
+    if total_len > max_model_len:
+        raise ValueError(
+            f"experiment {experiment_name!r} has input_len + output_len "
+            f"({input_len} + {output_len} = {total_len}) greater than "
+            f"max_model_len ({max_model_len}); increase max_model_len or "
+            "reduce the workload lengths"
+        )
+
+
 def normalize_field_value(field_name: str, value: Any) -> Any:
     """
     Return a normalized field value or raise ``TypeError`` or ``ValueError``.
@@ -261,7 +287,13 @@ def validate_field_value(field_name: str, value: Any) -> None:
     """
     expected_type = _FIELD_TYPES[field_name]
     _require_type(field_name, value, expected_type)
-    if field_name in {"num_requests", "input_len", "output_len", "repeats"}:
+    if field_name in {
+        "num_requests",
+        "input_len",
+        "output_len",
+        "max_model_len",
+        "repeats",
+    }:
         if value <= 0:
             raise ValueError(f"{field_name} must be greater than zero")
     elif (

@@ -57,6 +57,24 @@ class SweepTests(unittest.TestCase):
             ],
         )
 
+    def test_expands_max_model_len_in_scalar_field_order(self):
+        config = Config(
+            input_len=(10,),
+            output_len=(10,),
+            max_model_len=(20, 40),
+            experiment_name=("context-20", "context-40"),
+        )
+
+        expanded = sweep.expand_config(config)
+
+        self.assertEqual(
+            [
+                (run.max_model_len, run.experiment_name)
+                for run in expanded
+            ],
+            [(20, "context-20"), (40, "context-40")],
+        )
+
     def test_has_no_cli_or_benchmark_execution_responsibilities(self):
         self.assertFalse(hasattr(sweep, "parse_args"))
         self.assertFalse(hasattr(sweep, "main"))

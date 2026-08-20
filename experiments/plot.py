@@ -62,6 +62,27 @@ _METRICS = (
         lambda result: result.request_throughput,
     ),
     _Metric(
+        "latency-p50",
+        "Latency p50",
+        "s",
+        True,
+        lambda result: result.latency_p50,
+    ),
+    _Metric(
+        "latency-p90",
+        "Latency p90",
+        "s",
+        True,
+        lambda result: result.latency_p90,
+    ),
+    _Metric(
+        "latency-p99",
+        "Latency p99",
+        "s",
+        True,
+        lambda result: result.latency_p99,
+    ),
+    _Metric(
         "output-throughput",
         "Output throughput",
         "tok/s",
@@ -74,6 +95,34 @@ _METRICS = (
         "tok/s",
         True,
         lambda result: result.total_throughput,
+    ),
+    _Metric(
+        "prefill-throughput",
+        "Prefill throughput",
+        "tok/s",
+        True,
+        lambda result: result.prefill_throughput,
+    ),
+    _Metric(
+        "decode-throughput",
+        "Decode throughput",
+        "tok/s",
+        True,
+        lambda result: result.decode_throughput,
+    ),
+    _Metric(
+        "prefill-time",
+        "Prefill time",
+        "s",
+        True,
+        lambda result: result.prefill_time,
+    ),
+    _Metric(
+        "decode-time",
+        "Decode time",
+        "s",
+        True,
+        lambda result: result.decode_time,
     ),
     _Metric(
         "peak-kvcache-blocks",
@@ -190,24 +239,29 @@ def plot_1d(
     paths = []
 
     for metric in _METRICS:
-        medians = []
-        minimums = []
-        maximums = []
+        centers = []
+        lower_bounds = []
+        upper_bounds = []
         for record in ordered:
             value = metric.value(record.result)
             if metric.summary:
                 assert isinstance(value, MetricSummary)
-                medians.append(value.median)
-                minimums.append(value.minimum)
-                maximums.append(value.maximum)
+                if value.mean is not None and value.standard_deviation is not None:
+                    centers.append(value.mean)
+                    lower_bounds.append(value.mean - value.standard_deviation)
+                    upper_bounds.append(value.mean + value.standard_deviation)
+                else:
+                    centers.append(value.median)
+                    lower_bounds.append(value.minimum)
+                    upper_bounds.append(value.maximum)
             else:
                 scalar = float(value)
-                medians.append(scalar)
+                centers.append(scalar)
 
         figure, axis = plt.subplots(figsize=(8, 5))
-        axis.plot(x_positions, medians, marker="o", linewidth=2)
+        axis.plot(x_positions, centers, marker="o", linewidth=2)
         if metric.summary:
-            axis.fill_between(x_positions, minimums, maximums, alpha=0.2)
+            axis.fill_between(x_positions, lower_bounds, upper_bounds, alpha=0.2)
         axis.set_xticks(
             x_positions,
             [_format_dimension_value(value) for value in values],
@@ -261,11 +315,17 @@ def plot_2d(
                 value = metric.value(by_coordinate[(x_value, y_value)].result)
                 if metric.summary:
                     assert isinstance(value, MetricSummary)
-                    matrix[y_index, x_index] = value.median
-                    annotation_row.append(
-                        f"{value.median:.2f}\n"
-                        f"[{value.minimum:.2f}, {value.maximum:.2f}]"
-                    )
+                    if value.mean is not None and value.standard_deviation is not None:
+                        matrix[y_index, x_index] = value.mean
+                        annotation_row.append(
+                            f"{value.mean:.2f}\n± {value.standard_deviation:.2f}"
+                        )
+                    else:
+                        matrix[y_index, x_index] = value.median
+                        annotation_row.append(
+                            f"{value.median:.2f}\n"
+                            f"[{value.minimum:.2f}, {value.maximum:.2f}]"
+                        )
                 else:
                     scalar = float(value)
                     matrix[y_index, x_index] = scalar
@@ -330,13 +390,34 @@ def _decode_result(raw: dict[str, object]) -> BenchmarkResult:
                 "to collect KV-cache block metrics"
             )
         raise ValueError("result is missing KV-cache block metrics")
+    phase_fields = {
+        "latency_p50",
+        "latency_p90",
+        "latency_p99",
+        "prefill_throughput",
+        "decode_throughput",
+        "prefill_time",
+        "decode_time",
+    }
+    if missing := phase_fields - decoded.keys():
+        raise ValueError(
+            "report is missing latency/phase metrics "
+            f"({', '.join(sorted(missing))}); rerun the experiment"
+        )
     for field_name in (
         "output_tokens",
         "total_tokens",
         "elapsed_time",
+        "latency_p50",
+        "latency_p90",
+        "latency_p99",
         "request_throughput",
         "output_throughput",
         "total_throughput",
+        "prefill_throughput",
+        "decode_throughput",
+        "prefill_time",
+        "decode_time",
     ):
         value = decoded.get(field_name)
         if not isinstance(value, dict):
@@ -365,6 +446,11 @@ def _ordered_values(records: Sequence[PlotRecord], dimension: str) -> list[objec
         value = _dimension_value(record, dimension)
         if value not in values:
             values.append(value)
+    if all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in values
+    ):
+        values.sort()
     return values
 
 

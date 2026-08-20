@@ -62,6 +62,8 @@ class ExperimentTests(unittest.TestCase):
                     "--enforce-eager",
                     "--temperature",
                     "0",
+                    "--max-model-len",
+                    "8192",
                 ]
             )
 
@@ -85,6 +87,13 @@ class ExperimentTests(unittest.TestCase):
         self.assertTrue(
             all(
                 config.temperature == 0
+                for group in args.groups
+                for config in group.configs
+            )
+        )
+        self.assertTrue(
+            all(
+                config.max_model_len == 8192
                 for group in args.groups
                 for config in group.configs
             )

@@ -68,8 +68,8 @@ flowchart TD
     CALLER -->|experiment parent| EOUTPUT["Rich result + experiment JSON"]
     EOUTPUT --> DISPATCH{"Varying dimensions"}
     DISPATCH -->|0D| RESULT["Result only"]
-    DISPATCH -->|1D| LINE["6 line plots"]
-    DISPATCH -->|2D| HEATMAP["6 heatmaps"]
+    DISPATCH -->|1D| LINE["13 line plots"]
+    DISPATCH -->|2D| HEATMAP["13 heatmaps"]
     EOUTPUT --> EREPORT["experiments/report/"]
     RESULT --> EREPORT
     LINE --> EREPORT
@@ -158,6 +158,7 @@ python benchmarks/benchmark.py \
   --num-requests 256 \
   --input-len 1024 \
   --output-len 256 \
+  --max-model-len 8192 \
   --temperature 0 \
   --repeats 3 \
   --experiment-name baseline
@@ -165,11 +166,15 @@ python benchmarks/benchmark.py \
 
 `temperature: 0` selects greedy decoding. Positive temperatures use stochastic
 sampling. Add `--enforce-eager` to disable CUDA graph execution.
+`input_len + output_len` must not exceed `max_model_len`. The engine also caps
+the effective value at the model's `max_position_embeddings`. The field defaults
+to `8192` when omitted; repository experiment configs also set it explicitly.
 
 The benchmark prints a Rich result table and writes a JSON report under
 `benchmarks/report/`. Each report includes workload totals, median/minimum/
-maximum timing and throughput values, peak used KV-cache blocks, and peak
-KV-cache utilization.
+maximum/mean/standard-deviation summaries, request latency p50/p90/p99,
+prefill/decode time and throughput, peak used KV-cache blocks, and peak KV-cache
+utilization.
 
 <a id="experiments"></a>
 
@@ -184,6 +189,7 @@ model: ~/huggingface/Qwen3-0.6B/
 num_requests: 256
 input_len: [512, 1024]
 output_len: 256
+max_model_len: 8192
 seed: 0
 temperature: 0
 repeats: 3
@@ -218,6 +224,21 @@ python experiments/experiment.py \
   --config experiments/configs/baseline-output-sweeps.yaml
 ```
 
+### Shipped baseline suite
+
+The repository baseline uses greedy decoding, CUDA graphs, `max_model_len: 8192`,
+and seven measured repeats per point. Shorter sequences keep the suite practical,
+while the final point of each sweep is expected to saturate the logical KV cache.
+
+| Config | Fixed workload | Sweep values |
+| --- | --- | --- |
+| `baseline-req-sweeps.yaml` | input 256, output 256 | requests: 16, 32, 64, 128, 256 |
+| `baseline-input-sweeps.yaml` | 64 requests, output 256 | input: 128, 256, 512, 1024, 2048 |
+| `baseline-output-sweeps.yaml` | 128 requests, input 256 | output: 64, 128, 256, 512, 768 |
+
+Reports produced by the earlier 4096-context workloads remain useful as
+historical characterization, but should not be mixed into a new baseline plot.
+
 Benchmark CLI options can override scalar YAML values for the invocation:
 
 ```bash
@@ -236,13 +257,15 @@ state cannot leak into the next measurement.
 Reports and PNG plots are written to `experiments/report/`:
 
 - 0 varying dimensions: Rich result and JSON report only.
-- 1 varying dimension: six median line charts; timing and throughput charts
-  include min/max bands.
-- 2 varying dimensions: six annotated median heatmaps; timing and throughput
-  cells also show min/max values.
+- 1 varying dimension: thirteen mean line charts; summarized metrics include
+  standard-deviation bands.
+- 2 varying dimensions: thirteen annotated mean heatmaps; summarized metric
+  cells also show standard deviation.
 
-The six plotted metrics are elapsed time, request throughput, output throughput,
-total throughput, peak KV-cache blocks, and peak KV-cache utilization.
+The thirteen plotted metrics cover elapsed time, latency p50/p90/p99, request,
+output, total, prefill, and decode throughput, prefill/decode time, and the two
+KV-cache occupancy metrics. Output and total throughput remain available because
+they describe end-to-end serving rates rather than phase-local execution rates.
 
 Existing experiment reports can be plotted again without running the model:
 
@@ -254,7 +277,8 @@ python experiments/experiment.py --plot-only \
 
 Only the explicitly listed reports form the plotting group. They must contain
 compatible `experiment_config` and result payloads. Reports containing only the
-legacy GPU allocator peak fields must be regenerated before using plot-only mode.
+legacy GPU allocator peak fields or lacking latency/phase metrics must be
+regenerated before using plot-only mode.
 
 <a id="pluggable-design"></a>
 

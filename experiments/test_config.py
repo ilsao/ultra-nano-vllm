@@ -23,6 +23,7 @@ class ConfigTests(unittest.TestCase):
                 num_requests=(256,),
                 input_len=(1024,),
                 output_len=(1024,),
+                max_model_len=(8192,),
                 seed=(0,),
                 temperature=(0.6,),
                 repeats=(3,),
@@ -36,6 +37,7 @@ class ConfigTests(unittest.TestCase):
             """
             model: /models/test
             num_requests: 8
+            max_model_len: 8192
             temperature: 1
             enforce_eager: true
             experiment_name: scalar-run
@@ -45,6 +47,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.model, ("/models/test",))
         self.assertEqual(config.num_requests, (8,))
         self.assertEqual(config.temperature, (1.0,))
+        self.assertEqual(config.max_model_len, (8192,))
         self.assertEqual(config.enforce_eager, (True,))
         self.assertEqual(config.input_len, (1024,))
         self.assertEqual(config.experiment_name, ("scalar-run",))
@@ -75,29 +78,25 @@ class ConfigTests(unittest.TestCase):
         paths = sorted(config_dir.glob("*.yaml"))
         groups = resolve_config_groups(paths)
         expected = {
-            "baseline-eager-comparison": (
-                ("enforce_eager",),
-                ("baseline-cuda-graph", "baseline-eager"),
-            ),
             "baseline-input-sweeps": (
                 ("input_len",),
                 tuple(
                     f"baseline-input-{value}"
-                    for value in (256, 512, 1024, 2048, 4096)
+                    for value in (128, 256, 512, 1024, 2048)
                 ),
             ),
             "baseline-output-sweeps": (
                 ("output_len",),
                 tuple(
                     f"baseline-output-{value}"
-                    for value in (256, 512, 1024, 2048, 4096)
+                    for value in (64, 128, 256, 512, 768)
                 ),
             ),
             "baseline-req-sweeps": (
                 ("num_requests",),
                 tuple(
                     f"baseline-req-{value}"
-                    for value in (32, 64, 128, 256, 512)
+                    for value in (16, 32, 64, 128, 256)
                 ),
             ),
         }
@@ -112,8 +111,39 @@ class ConfigTests(unittest.TestCase):
             },
             expected,
         )
+        by_name = {group.name: group.configs for group in groups}
+        self.assertEqual(
+            [
+                (config.num_requests, config.input_len, config.output_len)
+                for config in by_name["baseline-req-sweeps"]
+            ],
+            [(value, 256, 256) for value in (16, 32, 64, 128, 256)],
+        )
+        self.assertEqual(
+            [
+                (config.num_requests, config.input_len, config.output_len)
+                for config in by_name["baseline-input-sweeps"]
+            ],
+            [(64, value, 256) for value in (128, 256, 512, 1024, 2048)],
+        )
+        self.assertEqual(
+            [
+                (config.num_requests, config.input_len, config.output_len)
+                for config in by_name["baseline-output-sweeps"]
+            ],
+            [(128, 256, value) for value in (64, 128, 256, 512, 768)],
+        )
         configs = [config for group in groups for config in group.configs]
-        self.assertTrue(configs, "expected at least one repository experiment config")
+        self.assertEqual(len(configs), 15)
+        self.assertTrue(all(config.repeats == 7 for config in configs))
+        self.assertTrue(all(not config.enforce_eager for config in configs))
+        self.assertTrue(all(config.max_model_len == 8192 for config in configs))
+        self.assertTrue(
+            all(
+                config.input_len + config.output_len <= config.max_model_len
+                for config in configs
+            )
+        )
         self.assertTrue(all(config.temperature == 0.0 for config in configs))
         self.assertTrue(
             all(config.engine_component == EngineComponent() for config in configs)
@@ -141,6 +171,7 @@ class ConfigTests(unittest.TestCase):
             ({"num_requests": (0,)}, "num_requests"),
             ({"input_len": (0,)}, "input_len"),
             ({"output_len": (-1,)}, "output_len"),
+            ({"max_model_len": (0,)}, "max_model_len"),
             ({"temperature": (-1.0,)}, "temperature"),
             ({"temperature": (1e-12,)}, "temperature"),
             ({"repeats": (0,)}, "repeats"),
@@ -258,6 +289,27 @@ class ConfigGroupTests(unittest.TestCase):
                 ):
                     resolve_config_groups(paths, overrides)
 
+    def test_rejects_workload_longer_than_max_model_len_before_execution(self):
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "too-long.yaml"
+            path.write_text(
+                "input_len: 4096\n"
+                "output_len: 1024\n"
+                "max_model_len: 4096\n"
+                "experiment_name: too-long\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"experiment 'too-long'.*4096 \+ 1024 = 5120.*increase",
+            ):
+                resolve_config_groups([path])
+
+            groups = resolve_config_groups([path], {"max_model_len": 8192})
+
+        self.assertEqual(groups[0].configs[0].max_model_len, 8192)
+
     def test_infers_dimensions_in_domain_order_and_validates_grid(self):
         configs = [
             BenchmarkConfig(
@@ -277,6 +329,7 @@ class ConfigGroupTests(unittest.TestCase):
                 "num_requests",
                 "input_len",
                 "output_len",
+                "max_model_len",
                 "seed",
                 "temperature",
                 "repeats",
@@ -295,6 +348,17 @@ class ConfigGroupTests(unittest.TestCase):
         self.assertEqual(
             validate_config_grid(configs),
             ("num_requests", "enforce_eager"),
+        )
+        context_configs = [
+            BenchmarkConfig(
+                max_model_len=value,
+                experiment_name=f"context-{value}",
+            )
+            for value in (4096, 8192)
+        ]
+        self.assertEqual(
+            infer_config_dimensions(context_configs),
+            ("max_model_len",),
         )
 
     def test_rejects_empty_duplicate_and_incomplete_grids(self):

@@ -67,8 +67,8 @@ flowchart TD
     CALLER -->|experiment parent| EOUTPUT["Rich result + experiment JSON"]
     EOUTPUT --> DISPATCH{"Varying dimensions"}
     DISPATCH -->|0D| RESULT["Result only"]
-    DISPATCH -->|1D| LINE["6 line plots"]
-    DISPATCH -->|2D| HEATMAP["6 heatmaps"]
+    DISPATCH -->|1D| LINE["13 line plots"]
+    DISPATCH -->|2D| HEATMAP["13 heatmaps"]
     EOUTPUT --> EREPORT["experiments/report/"]
     RESULT --> EREPORT
     LINE --> EREPORT
@@ -154,6 +154,7 @@ python benchmarks/benchmark.py \
   --num-requests 256 \
   --input-len 1024 \
   --output-len 256 \
+  --max-model-len 8192 \
   --temperature 0 \
   --repeats 3 \
   --experiment-name baseline
@@ -161,10 +162,14 @@ python benchmarks/benchmark.py \
 
 `temperature: 0` 代表 greedy decoding；正溫度使用 stochastic sampling。
 加入 `--enforce-eager` 可停用 CUDA graph 執行。
+`input_len + output_len` 不得超過 `max_model_len`；engine 也會依模型的
+`max_position_embeddings` 限制 effective value。省略此欄位時預設為 `8192`；
+repository experiment configs 也會明確設定此值。
 
 Benchmark 會顯示 Rich 結果表，並將 JSON 報告寫入 `benchmarks/report/`。
-每份報告包含 workload 總量、時間與吞吐量的 median/minimum/maximum、
-KV-cache peak used blocks 與 peak utilization。
+每份報告包含 workload 總量、時間與吞吐量的 median/minimum/maximum/mean/
+standard deviation、request latency p50/p90/p99、prefill/decode 時間與吞吐量，
+以及 KV-cache peak used blocks 與 peak utilization。
 
 <a id="experiments"></a>
 
@@ -178,6 +183,7 @@ model: ~/huggingface/Qwen3-0.6B/
 num_requests: 256
 input_len: [512, 1024]
 output_len: 256
+max_model_len: 8192
 seed: 0
 temperature: 0
 repeats: 3
@@ -210,6 +216,21 @@ python experiments/experiment.py \
   --config experiments/configs/baseline-output-sweeps.yaml
 ```
 
+### Shipped Baseline Suite
+
+Repository baseline 使用 greedy decoding、CUDA graphs、`max_model_len: 8192`，
+且每個點執行七次 measured repeats。較短的 sequence 讓完整 suite 保持可執行，
+每個 sweep 的最後一點則預期會使 logical KV cache 飽和。
+
+| Config | 固定 workload | Sweep values |
+| --- | --- | --- |
+| `baseline-req-sweeps.yaml` | input 256、output 256 | requests：16、32、64、128、256 |
+| `baseline-input-sweeps.yaml` | 64 requests、output 256 | input：128、256、512、1024、2048 |
+| `baseline-output-sweeps.yaml` | 128 requests、input 256 | output：64、128、256、512、768 |
+
+先前以 4096 context 產生的報告仍可作為歷史 characterization，但不應混入新的
+baseline plot。
+
 Benchmark CLI option 可以在該次執行中覆寫 YAML 的 scalar value：
 
 ```bash
@@ -227,11 +248,12 @@ cached allocation 或 NCCL process-group state 洩漏至下一次測量。
 報告與 PNG 圖表會寫入 `experiments/report/`：
 
 - 0 個變化維度：僅產生 Rich 結果與 JSON 報告。
-- 1 個變化維度：產生六張 median 折線圖；時間與吞吐量圖包含 min/max band。
-- 2 個變化維度：產生六張附註 median 的 heatmap；時間與吞吐量 cell 也會顯示 min/max。
+- 1 個變化維度：產生十三張 mean 折線圖；summary 指標包含 standard-deviation band。
+- 2 個變化維度：產生十三張附註 mean 的 heatmap；summary 指標 cell 也會顯示 standard deviation。
 
-六項繪圖指標為 elapsed time、request throughput、output throughput、total throughput、
-peak KV-cache blocks 與 peak KV-cache utilization。
+十三項繪圖指標涵蓋 elapsed time、latency p50/p90/p99、request/output/total/prefill/
+decode throughput、prefill/decode time，以及兩項 KV-cache 使用量指標。Output 與 total
+throughput 仍予保留，因為它們描述端到端服務率，而非單一 phase 的執行率。
 
 可以只使用既有 experiment 報告重新繪圖，而不執行模型：
 
@@ -243,6 +265,7 @@ python experiments/experiment.py --plot-only \
 
 只有明確列出的報告會組成該繪圖群組，且必須包含相容的 `experiment_config` 與 result payload。
 僅包含舊版 GPU allocator peak 欄位的報告，必須重新執行實驗後才能用於 plot-only mode。
+缺少 latency/phase 指標的舊報告亦須重新執行實驗。
 
 <a id="pluggable-design"></a>
 

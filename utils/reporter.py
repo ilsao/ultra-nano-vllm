@@ -120,7 +120,11 @@ class Reporter:
         performance.add_column("Median", justify="right")
         performance.add_column("Min", justify="right")
         performance.add_column("Max", justify="right")
+        performance.add_column("Mean ± std", justify="right")
         _add_metric_row(performance, "Elapsed time", bench_result.elapsed_time, "s")
+        _add_metric_row(performance, "Latency p50", bench_result.latency_p50, "s")
+        _add_metric_row(performance, "Latency p90", bench_result.latency_p90, "s")
+        _add_metric_row(performance, "Latency p99", bench_result.latency_p99, "s")
         _add_metric_row(
             performance,
             "Request throughput",
@@ -138,6 +142,30 @@ class Reporter:
             "Total throughput",
             bench_result.total_throughput,
             "tok/s",
+        )
+        _add_metric_row(
+            performance,
+            "Prefill throughput",
+            bench_result.prefill_throughput,
+            "tok/s",
+        )
+        _add_metric_row(
+            performance,
+            "Decode throughput",
+            bench_result.decode_throughput,
+            "tok/s",
+        )
+        _add_metric_row(
+            performance,
+            "Prefill time",
+            bench_result.prefill_time,
+            "s",
+        )
+        _add_metric_row(
+            performance,
+            "Decode time",
+            bench_result.decode_time,
+            "s",
         )
 
         kvcache = Table.grid(padding=(0, 2))
@@ -224,9 +252,16 @@ def _add_metric_row(
     summary: MetricSummary,
     unit: str,
 ) -> None:
+    variability = (
+        f"[dim]{summary.mean:,.2f} ± "
+        f"{summary.standard_deviation:,.2f} {unit}[/dim]"
+        if summary.mean is not None and summary.standard_deviation is not None
+        else "[dim]n/a[/dim]"
+    )
     table.add_row(
         label,
         f"[bold green]{summary.median:,.2f} {unit}[/bold green]",
         f"[dim]{summary.minimum:,.2f} {unit}[/dim]",
         f"[dim]{summary.maximum:,.2f} {unit}[/dim]",
+        variability,
     )

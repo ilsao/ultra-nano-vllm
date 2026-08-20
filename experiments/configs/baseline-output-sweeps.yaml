@@ -1,10 +1,11 @@
 model: ~/huggingface/Qwen3-0.6B/
-num_requests: 256
-input_len: 1024
-output_len: [256, 512, 1024, 2048, 4096]
+num_requests: 64
+input_len: 1
+output_len: [128, 256, 512, 1024, 1280, 1536, 1537, 1792, 2048]
+max_model_len: 8192
 seed: 0
 temperature: 0.0
-repeats: 3
+repeats: 7
 enforce_eager: false
 
 scheduler: scheduler
@@ -14,8 +15,12 @@ sampler: sampler
 store_kvcache: store_kvcache
 
 experiment_name:
+  - baseline-output-128
   - baseline-output-256
   - baseline-output-512
   - baseline-output-1024
+  - baseline-output-1280
+  - baseline-output-1536
+  - baseline-output-1537
+  - baseline-output-1792
   - baseline-output-2048
-  - baseline-output-4096
