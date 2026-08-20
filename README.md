@@ -2,8 +2,6 @@
 
 <h1>Ultra-Nano-vLLM</h1>
 
-<h1>TODO: Update README for profiling...</h1>
-
 <p><strong>Measure. Isolate. Profile. Optimize.</strong></p>
 <p>A reproducible performance-research workflow for nano-vLLM.</p>
 
@@ -15,16 +13,11 @@
 </p>
 
 <p>
-  <a href="README.md">English</a> ·
-  <a href="README.zh-TW.md">繁體中文</a> ·
-  <a href="README.zh-CN.md">简体中文</a>
-</p>
-
-<p>
   <a href="#architecture">Architecture</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#benchmark">Benchmark</a> ·
   <a href="#experiments">Experiments</a> ·
+  <a href="#profiling">Profiling</a> ·
   <a href="#pluggable-design">Pluggable Design</a> ·
   <a href="#research-workflow">Research Workflow</a>
 </p>
@@ -282,6 +275,43 @@ compatible `experiment_config` and result payloads. Reports containing only the
 legacy GPU allocator peak fields or lacking latency/phase metrics must be
 regenerated before using plot-only mode.
 
+<a id="profiling"></a>
+
+## Profiling
+
+Profile only after a benchmark or controlled experiment has isolated a stable
+workload worth investigating. Keep the model, request count, input and output
+lengths, sampling settings, execution mode, and component selections fixed so
+the trace describes the same configuration as the saved baseline.
+
+Use the following workflow with any profiler that can capture the CPU and GPU
+activity relevant to the workload:
+
+1. Warm up the engine before interpreting the trace. Separate initialization,
+   model loading, compilation, and CUDA graph capture from steady-state work.
+2. Analyze prefill and decode independently. Prefill processes many prompt
+   tokens in parallel, while decode repeatedly processes a smaller token step;
+   their bottlenecks and useful comparisons are different.
+3. Correlate host activity with GPU kernels. Look for launch gaps,
+   synchronization, unexpected serialization, excessive short kernels, and
+   memory-transfer or allocation activity before attributing cost to a model
+   component.
+4. Form one bottleneck hypothesis at a time, make a focused change, and re-run
+   the same scalar configuration. A trace explains where time is spent; the
+   comparable benchmark result determines whether the change is an improvement.
+
+Optional NVTX annotations make the engine stages easier to correlate in tools
+that support them. Set `ENABLE_NVTX=1` in the benchmark or experiment process
+environment to emit ranges for scheduler operations, block allocation and
+deallocation, prefill/decode/sample input preparation, attention, KV-cache
+storage, and logits computation. When the variable is unset or has any other
+value, the wrappers do not open CUDA NVTX ranges.
+
+Profiling measurements may include collection overhead and should not replace
+the uninstrumented benchmark reports used for performance comparisons. The
+project intentionally does not require a particular profiler or prescribe a
+location for generated profiling artifacts.
+
 <a id="pluggable-design"></a>
 
 ## Pluggable components and kernels
@@ -353,8 +383,9 @@ llm = LLM(
 5. Re-run the same benchmark grid and compare the saved reports for performance
    improvement and regressions.
 
-The repository does not currently mandate a profiling framework, command, or
-artifact directory.
+The repository does not mandate a profiling framework. It provides optional
+NVTX instrumentation for compatible tools while leaving profiler selection,
+commands, and artifact storage to the investigation.
 
 <details>
 <summary><strong>Development verification</strong></summary>
