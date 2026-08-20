@@ -32,6 +32,7 @@ class Attention(nn.Module):
         if k_cache.numel() and v_cache.numel():
             self.store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
         if context.is_prefill:
+            # Prefix-cache hits read K/V entries from the paged cache.
             if context.block_tables is not None:
                 k, v = k_cache, v_cache
             return flash_attn_varlen_func(
@@ -46,6 +47,7 @@ class Attention(nn.Module):
                 causal=True,
                 block_table=context.block_tables,
             )
+        # Decode attends to the paged KV cache and appends one token per sequence.
         return flash_attn_with_kvcache(
             q.unsqueeze(1),
             k_cache,
