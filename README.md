@@ -2,6 +2,8 @@
 
 <h1>Ultra-Nano-vLLM</h1>
 
+<h1>TODO: Update README for profiling...</h1>
+
 <p><strong>Measure. Isolate. Profile. Optimize.</strong></p>
 <p>A reproducible performance-research workflow for nano-vLLM.</p>
 

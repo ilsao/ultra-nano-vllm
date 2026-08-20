@@ -10,6 +10,7 @@ from nanovllm.layers.linear import QKVParallelLinear, MergedColumnParallelLinear
 from nanovllm.layers.rotary_embedding import get_rope
 from nanovllm.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
 
+from utils.profiling import nvtx_annotate
 
 class Qwen3Attention(nn.Module):
 
@@ -220,6 +221,7 @@ class Qwen3ForCausalLM(nn.Module):
     ) -> torch.Tensor:
         return self.model(input_ids, positions)
 
+    @nvtx_annotate("Qwen3ForCausalLM.compute_logits")
     def compute_logits(
         self,
         hidden_states: torch.Tensor,

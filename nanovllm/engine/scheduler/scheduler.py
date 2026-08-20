@@ -3,6 +3,7 @@ from collections import deque
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence, SequenceStatus
 
+from utils.profiling import nvtx_annotate
 
 class Scheduler:
     def __init__(self, config: Config, block_manager):
@@ -26,6 +27,7 @@ class Scheduler:
     def add(self, seq: Sequence):
         self.waiting.append(seq)
 
+    @nvtx_annotate("Scheduler.schedule")
     def schedule(self) -> tuple[list[Sequence], bool]:
         scheduled_seqs = []
         num_batched_tokens = 0
@@ -75,12 +77,14 @@ class Scheduler:
         self.running.extendleft(reversed(scheduled_seqs))
         return scheduled_seqs, False
 
+    @nvtx_annotate("Scheduler.preempt")
     def preempt(self, seq: Sequence):
         seq.status = SequenceStatus.WAITING
         seq.is_prefill = True
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
 
+    @nvtx_annotate("Scheduler.postprocess")
     def postprocess(
         self,
         seqs: list[Sequence],

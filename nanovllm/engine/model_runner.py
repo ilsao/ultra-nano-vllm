@@ -10,6 +10,7 @@ from nanovllm.models.qwen3 import Qwen3ForCausalLM
 from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
 
+from utils.profiling import nvtx_annotate
 
 class ModelRunner:
 
@@ -237,6 +238,7 @@ class ModelRunner:
                                     dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         return block_tables
 
+    @nvtx_annotate("ModelRunner.prepare_prefill")
     def prepare_prefill(self, seqs: list[Sequence]):
         """ 
         Prepares the input token IDs, positions, and other necessary tensors 
@@ -371,6 +373,7 @@ class ModelRunner:
 
         return input_ids, positions
 
+    @nvtx_annotate("ModelRunner.prepare_decode")
     def prepare_decode(self, seqs: list[Sequence]):
         """ 
         Prepares the input token IDs and positions for the decode phase of the model.
@@ -417,6 +420,7 @@ class ModelRunner:
 
         return input_ids, positions
 
+    @nvtx_annotate("ModelRunner.prepare_sample")
     def prepare_sample(self, seqs: list[Sequence]):
         """ 
         Prepares the temperature tensor for sampling during the model's output generation.
