@@ -44,8 +44,12 @@ class Scheduler:
         # The number of tokens scheduled in the current batch.
         num_batched_tokens = 0
 
+        # Prefill first. 
+        # It's possible to improve the efficiency by adapting decode-maximal batching
+
         # Prefill sequences whose KV cache is not complete yet.
         while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
+            # Classical FCFS, may cause efficiency issues
             seq = self.waiting[0]
             # The number of tokens that can still be scheduled in this batch.
             remaining = self.max_num_batched_tokens - num_batched_tokens
@@ -86,6 +90,7 @@ class Scheduler:
             # If a new block cannot be appended, preempt another sequence to
             # release its blocks. The current sequence is the final fallback.
             while not self.block_manager.can_append(seq):
+                # Naive preemption, have room for improvement. 
                 if self.running:
                     self.preempt(self.running.pop())
                 else:

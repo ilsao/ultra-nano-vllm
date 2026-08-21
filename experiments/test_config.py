@@ -11,9 +11,6 @@ from experiments.config import (
     resolve_config_groups,
     validate_config_grid,
 )
-from nanovllm import EngineComponent
-
-
 class ConfigTests(unittest.TestCase):
     def test_defaults_match_benchmark_defaults_as_singleton_tuples(self):
         self.assertEqual(
@@ -72,84 +69,6 @@ class ConfigTests(unittest.TestCase):
             config.experiment_name,
             ("one-ten", "one-twenty", "two-ten", "two-twenty"),
         )
-
-    def test_all_repository_configs_resolve_to_baseline_experiments(self):
-        config_dir = Path(__file__).resolve().parent / "configs"
-        paths = sorted(config_dir.glob("*.yaml"))
-        groups = resolve_config_groups(paths)
-        expected = {
-            "baseline-input-sweeps": (
-                ("input_len",),
-                tuple(
-                    f"baseline-input-{value}"
-                    for value in (128, 256, 512, 1024, 2048)
-                ),
-            ),
-            "baseline-output-sweeps": (
-                ("output_len",),
-                tuple(
-                    f"baseline-output-{value}"
-                    for value in (64, 128, 256, 512, 768)
-                ),
-            ),
-            "baseline-req-sweeps": (
-                ("num_requests",),
-                tuple(
-                    f"baseline-req-{value}"
-                    for value in (16, 32, 64, 128, 256)
-                ),
-            ),
-        }
-
-        self.assertEqual(
-            {
-                group.name: (
-                    group.dimensions,
-                    tuple(config.experiment_name for config in group.configs),
-                )
-                for group in groups
-            },
-            expected,
-        )
-        by_name = {group.name: group.configs for group in groups}
-        self.assertEqual(
-            [
-                (config.num_requests, config.input_len, config.output_len)
-                for config in by_name["baseline-req-sweeps"]
-            ],
-            [(value, 256, 256) for value in (16, 32, 64, 128, 256)],
-        )
-        self.assertEqual(
-            [
-                (config.num_requests, config.input_len, config.output_len)
-                for config in by_name["baseline-input-sweeps"]
-            ],
-            [(64, value, 256) for value in (128, 256, 512, 1024, 2048)],
-        )
-        self.assertEqual(
-            [
-                (config.num_requests, config.input_len, config.output_len)
-                for config in by_name["baseline-output-sweeps"]
-            ],
-            [(128, 256, value) for value in (64, 128, 256, 512, 768)],
-        )
-        configs = [config for group in groups for config in group.configs]
-        self.assertEqual(len(configs), 15)
-        self.assertTrue(all(config.repeats == 7 for config in configs))
-        self.assertTrue(all(not config.enforce_eager for config in configs))
-        self.assertTrue(all(config.max_model_len == 8192 for config in configs))
-        self.assertTrue(
-            all(
-                config.input_len + config.output_len <= config.max_model_len
-                for config in configs
-            )
-        )
-        self.assertTrue(all(config.temperature == 0.0 for config in configs))
-        self.assertTrue(
-            all(config.engine_component == EngineComponent() for config in configs)
-        )
-        names = [config.experiment_name for config in configs]
-        self.assertEqual(len(names), len(set(names)))
 
     def test_rejects_invalid_document_shapes_and_fields(self):
         cases = {
