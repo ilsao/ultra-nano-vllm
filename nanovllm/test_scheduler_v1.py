@@ -7,7 +7,7 @@ from nanovllm import EngineComponent
 from nanovllm.engine.sequence import Sequence, SequenceStatus
 
 
-class OptimizedSchedulerTests(unittest.TestCase):
+class SchedulerV1Tests(unittest.TestCase):
     def make_scheduler(
         self,
         *,
@@ -24,7 +24,7 @@ class OptimizedSchedulerTests(unittest.TestCase):
             eos=0,
         )
         return EngineComponent(
-            scheduler="scheduler-optimized"
+            scheduler="scheduler-v1"
         ).create_scheduler(config)
 
     def test_prefill_backfills_with_later_sequence_that_fits(self):

@@ -18,13 +18,13 @@ input_order:
   - alternating
 output_len: 1
 max_model_len: 8192
-seed: 10
+seed: 0
 temperature: 0.0
 repeats: 10
 enforce_eager: false
 
-component_name: [scheduler-optimized, baseline]
-scheduler: [scheduler-optimized, scheduler]
+component_name: [baseline, scheduler-v1, scheduler-v2]
+scheduler: [scheduler, scheduler-v1, scheduler-v2]
 block_manager: block_manager
 attention: attention
 sampler: sampler

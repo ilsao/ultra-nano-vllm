@@ -120,65 +120,56 @@ class ConfigTests(unittest.TestCase):
 
 
 class ConfigGroupTests(unittest.TestCase):
-    def test_scheduler_pareto_configs_are_counterbalanced_and_valid(self):
+    def test_only_baseline_and_scheduler_comparison_configs_remain(self):
         config_dir = Path(__file__).resolve().parent / "configs"
-        expected_workloads = {"prefill": 6, "kv": 3, "decode": 3}
+        expected_names = {
+            "baseline-input-sweeps.yaml",
+            "baseline-output-sweeps.yaml",
+            "baseline-req-sweeps.yaml",
+            "scheduler-comparison-decode.yaml",
+            "scheduler-comparison-input.yaml",
+            "scheduler-comparison-kv.yaml",
+            "scheduler-comparison-output.yaml",
+            "scheduler-comparison-prefill.yaml",
+            "scheduler-comparison-req.yaml",
+        }
+
+        self.assertEqual(
+            {path.name for path in config_dir.glob("*.yaml")},
+            expected_names,
+        )
+
+    def test_scheduler_comparison_configs_form_three_way_grids(self):
+        config_dir = Path(__file__).resolve().parent / "configs"
+        expected_workloads = {
+            "req": 10,
+            "input": 5,
+            "output": 9,
+            "prefill": 6,
+            "kv": 3,
+            "decode": 3,
+        }
         for suite, workload_count in expected_workloads.items():
             with self.subTest(suite=suite):
-                ab = resolve_config_groups(
-                    [config_dir / f"scheduler-pareto-{suite}-ab.yaml"]
-                )[0]
-                ba = resolve_config_groups(
-                    [config_dir / f"scheduler-pareto-{suite}-ba.yaml"]
+                group = resolve_config_groups(
+                    [config_dir / f"scheduler-comparison-{suite}.yaml"]
                 )[0]
 
-                self.assertEqual(len(ab.runs), workload_count * 2)
-                self.assertEqual(len(ba.runs), workload_count * 2)
-                self.assertEqual(ab.dimensions, ("workload", "component"))
-                self.assertEqual(ba.dimensions, ("workload", "component"))
+                self.assertEqual(len(group.runs), workload_count * 3)
+                self.assertEqual(group.dimensions, ("workload", "component"))
                 self.assertEqual(
-                    [run.config.engine_component.scheduler for run in ab.runs[:2]],
-                    ["scheduler", "scheduler-optimized"],
+                    [run.component_name for run in group.runs[:3]],
+                    ["baseline", "scheduler-v1", "scheduler-v2"],
                 )
                 self.assertEqual(
-                    [run.config.engine_component.scheduler for run in ba.runs[:2]],
-                    ["scheduler-optimized", "scheduler"],
+                    [
+                        run.config.engine_component.scheduler
+                        for run in group.runs[:3]
+                    ],
+                    ["scheduler", "scheduler-v1", "scheduler-v2"],
                 )
-                self.assertTrue(all(run.config.seed == 0 for run in ab.runs))
-                self.assertTrue(all(run.config.seed == 10 for run in ba.runs))
-
-    def test_scheduler_optimized_configs_form_expected_safe_grids(self):
-        config_dir = Path(__file__).resolve().parent / "configs"
-        groups = resolve_config_groups(
-            [
-                config_dir / "scheduler-optimized-req-sweeps.yaml",
-                config_dir / "scheduler-optimized-input-sweeps.yaml",
-                config_dir / "scheduler-optimized-output-sweeps.yaml",
-            ]
-        )
-
-        self.assertEqual(
-            [(len(group.configs), group.dimensions) for group in groups],
-            [
-                (20, ("workload", "component")),
-                (8, ("workload", "component")),
-                (14, ("workload", "component")),
-            ],
-        )
-        self.assertEqual(
-            [
-                max(
-                    max(
-                        config.input_len,
-                        config.alternate_input_len or config.input_len,
-                    )
-                    + config.output_len
-                    for config in group.configs
-                )
-                for group in groups
-            ],
-            [512, 8192, 3072],
-        )
+                self.assertTrue(all(run.config.seed == 0 for run in group.runs))
+                self.assertTrue(all(run.config.repeats == 10 for run in group.runs))
 
     def test_resolves_independent_groups_and_applies_overrides(self):
         with TemporaryDirectory() as temp_dir:

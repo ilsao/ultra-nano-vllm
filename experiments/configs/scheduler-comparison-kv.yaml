@@ -9,8 +9,8 @@ temperature: 0.0
 repeats: 10
 enforce_eager: false
 
-component_name: [baseline, scheduler-optimized]
-scheduler: [scheduler, scheduler-optimized]
+component_name: [baseline, scheduler-v1, scheduler-v2]
+scheduler: [scheduler, scheduler-v1, scheduler-v2]
 block_manager: block_manager
 attention: attention
 sampler: sampler

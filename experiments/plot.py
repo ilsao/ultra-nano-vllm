@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import textwrap
 from typing import Callable, Sequence
 
 os.environ.setdefault(
@@ -34,6 +35,12 @@ from nanovllm.engine.scheduler_metrics import SchedulerMetrics
 
 
 REPORT_DIR = Path(__file__).resolve().parent / "report"
+
+_SCHEDULER_SERIES_STYLES = {
+    "scheduler": ("tab:blue", "o"),
+    "scheduler-v1": ("tab:orange", "s"),
+    "scheduler-v2": ("tab:green", "^"),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,19 +315,23 @@ def plot_1d(
                 scalar = float(value)
                 centers.append(scalar)
 
-        figure, axis = plt.subplots(figsize=(8, 5))
+        labels = [_format_dimension_value(value, multiline=True) for value in values]
+        figure, axis = plt.subplots(
+            figsize=_figure_size(values, labels),
+            constrained_layout=True,
+        )
         axis.plot(x_positions, centers, marker="o", linewidth=2)
         if metric.summary:
             axis.fill_between(x_positions, lower_bounds, upper_bounds, alpha=0.2)
         axis.set_xticks(
             x_positions,
-            [_format_dimension_value(value) for value in values],
+            labels,
         )
+        axis.tick_params(axis="x", labelrotation=0)
         axis.set_xlabel(_format_dimension_name(dimension))
         axis.set_ylabel(f"{metric.title} ({metric.unit})")
         axis.set_title(f"{plot_name}: {metric.title}")
         axis.grid(axis="y", alpha=0.3)
-        figure.tight_layout()
         path = _output_path(
             output_dir,
             timestamp,
@@ -328,7 +339,7 @@ def plot_1d(
             f"1d-{dimension}",
             metric.name,
         )
-        figure.savefig(path, dpi=150)
+        figure.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(figure)
         paths.append(path)
     return paths
@@ -357,11 +368,20 @@ def plot_2d(
     timestamp = _plot_timestamp()
     paths = []
     markers = ("o", "s", "^", "D", "v", "P", "X", "*")
+    scheduler_selectors = _scheduler_series_selectors(
+        records, series_dimension
+    )
 
     for metric in _METRICS:
-        width = max(8.0, 1.2 * len(x_values))
-        figure, axis = plt.subplots(figsize=(width, 5.0))
+        labels = [
+            _format_dimension_value(value, multiline=True) for value in x_values
+        ]
+        figure, axis = plt.subplots(
+            figsize=_figure_size(x_values, labels),
+            constrained_layout=True,
+        )
         for series_index, series_value in enumerate(series_values):
+            scheduler_selector = scheduler_selectors.get(series_value)
             centers = []
             lower_bounds = []
             upper_bounds = []
@@ -382,12 +402,24 @@ def plot_2d(
                 else:
                     centers.append(float(value))
 
+            style = _SCHEDULER_SERIES_STYLES.get(scheduler_selector)
+            line_options = {
+                "marker": (
+                    style[1] if style else markers[series_index % len(markers)]
+                ),
+                "linewidth": 2,
+                "label": (
+                    scheduler_selector
+                    if scheduler_selector is not None
+                    else _format_dimension_value(series_value, multiline=True)
+                ),
+            }
+            if style:
+                line_options["color"] = style[0]
             line = axis.plot(
                 x_positions,
                 centers,
-                marker=markers[series_index % len(markers)],
-                linewidth=2,
-                label=_format_dimension_value(series_value),
+                **line_options,
             )[0]
             if metric.summary:
                 axis.fill_between(
@@ -400,14 +432,19 @@ def plot_2d(
 
         axis.set_xticks(
             x_positions,
-            [_format_dimension_value(value) for value in x_values],
+            labels,
         )
+        axis.tick_params(axis="x", labelrotation=0)
         axis.set_xlabel(_format_dimension_name(x_dimension))
         axis.set_ylabel(f"{metric.title} ({metric.unit})")
         axis.set_title(f"{plot_name}: {metric.title} ({metric.unit})")
-        axis.legend(title=_format_dimension_name(series_dimension))
+        axis.legend(
+            title=_format_dimension_name(series_dimension),
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1),
+            borderaxespad=0,
+        )
         axis.grid(axis="y", alpha=0.3)
-        figure.tight_layout()
         path = _output_path(
             output_dir,
             timestamp,
@@ -415,10 +452,36 @@ def plot_2d(
             f"2d-{x_dimension}-by-{series_dimension}",
             metric.name,
         )
-        figure.savefig(path, dpi=150)
+        figure.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(figure)
         paths.append(path)
     return paths
+
+
+def _scheduler_series_selectors(
+    records: Sequence[PlotRecord], series_dimension: str
+) -> dict[object, str]:
+    """Map scheduler-driven series values to their selector labels."""
+    if series_dimension == "scheduler":
+        return {
+            _dimension_value(record, series_dimension): str(
+                _dimension_value(record, series_dimension)
+            )
+            for record in records
+        }
+    if series_dimension != "component":
+        return {}
+
+    selectors: dict[object, str] = {}
+    for record in records:
+        series_value = _dimension_value(record, series_dimension)
+        selector = record.config.engine_component.scheduler
+        previous = selectors.setdefault(series_value, selector)
+        if previous != selector:
+            return {}
+    if len(set(selectors.values())) != len(selectors):
+        return {}
+    return selectors
 
 
 def select_2d_dimensions(
@@ -559,8 +622,28 @@ def _format_dimension_name(name: str) -> str:
     return name.replace("_", " ").title()
 
 
-def _format_dimension_value(value: object) -> str:
-    return str(value)
+def _format_dimension_value(value: object, *, multiline: bool = False) -> str:
+    formatted = str(value)
+    if not multiline or not isinstance(value, str):
+        return formatted
+    return "\n".join(
+        textwrap.wrap(
+            formatted,
+            width=14,
+            break_long_words=True,
+            break_on_hyphens=True,
+        )
+    )
+
+
+def _figure_size(
+    values: Sequence[object],
+    labels: Sequence[str],
+) -> tuple[float, float]:
+    width = max(8.0, min(24.0, 1.5 * len(values)))
+    max_lines = max((label.count("\n") + 1 for label in labels), default=1)
+    height = 5.0 + 0.3 * (max_lines - 1)
+    return width, height
 
 
 def _plot_timestamp() -> str:

@@ -53,6 +53,89 @@ class PlotTests(unittest.TestCase):
     def test_uses_config_domain_dimension_order(self):
         self.assertIs(plot.CONFIG_DIMENSIONS, CONFIG_DIMENSIONS)
 
+    def test_wraps_long_categorical_labels_without_changing_values(self):
+        value = "mixed-4096-alternating"
+        formatted = plot._format_dimension_value(value, multiline=True)
+
+        self.assertIn("\n", formatted)
+        self.assertEqual(formatted.replace("\n", ""), value)
+        self.assertEqual(
+            plot._format_dimension_value(4096, multiline=True),
+            "4096",
+        )
+
+    def test_figure_size_grows_for_more_categories_and_label_lines(self):
+        small = plot._figure_size(["one", "two"], ["one", "two"])
+        wide = plot._figure_size(
+            [f"workload-{index}" for index in range(10)],
+            [f"workload-{index}" for index in range(10)],
+        )
+        tall = plot._figure_size(["one"], ["one\ntwo\nthree"])
+
+        self.assertGreater(wide[0], small[0])
+        self.assertGreater(tall[1], small[1])
+
+    def test_plots_use_multiline_ticks_and_external_multiline_legend(self):
+        result = make_result(1.0)
+        one_dimensional = [
+            PlotRecord(
+                BenchmarkConfig(),
+                result,
+                "one-workload",
+                component,
+            )
+            for component in (
+                "baseline-scheduler-component",
+                "optimized-scheduler-component",
+            )
+        ]
+        two_dimensional = [
+            PlotRecord(BenchmarkConfig(), result, workload, component)
+            for workload in (
+                "homogeneous-short",
+                "mixed-4096-alternating",
+            )
+            for component in (
+                "baseline-scheduler-component",
+                "optimized-scheduler-component",
+            )
+        ]
+
+        close_figure = plot.plt.close
+        with TemporaryDirectory() as temp_dir, patch.object(
+            plot, "_METRICS", (plot._METRICS[0],)
+        ), patch.object(plot.plt, "close"):
+            plot_1d(
+                one_dimensional,
+                "component",
+                output_dir=temp_dir,
+            )
+            one_dimensional_figure = plot.plt.gcf()
+            one_dimensional_labels = [
+                tick.get_text()
+                for tick in one_dimensional_figure.axes[0].get_xticklabels()
+            ]
+            self.assertTrue(all("\n" in label for label in one_dimensional_labels))
+            close_figure(one_dimensional_figure)
+
+            plot_2d(
+                two_dimensional,
+                "workload",
+                "component",
+                output_dir=temp_dir,
+            )
+            two_dimensional_figure = plot.plt.gcf()
+            axis = two_dimensional_figure.axes[0]
+            tick_labels = [tick.get_text() for tick in axis.get_xticklabels()]
+            legend_labels = [
+                text.get_text() for text in axis.get_legend().get_texts()
+            ]
+
+            self.assertTrue(all("\n" in label for label in tick_labels))
+            self.assertTrue(all("\n" in label for label in legend_labels))
+            self.assertEqual(axis.get_legend()._loc, 2)
+            close_figure(two_dimensional_figure)
+
     def test_infers_dimensions_in_benchmark_field_order(self):
         records = [
             PlotRecord(
@@ -342,9 +425,9 @@ class PlotTests(unittest.TestCase):
             for index, (requests, scheduler) in enumerate(
                 (
                     (1, "scheduler"),
-                    (1, "scheduler-optimized"),
+                    (1, "scheduler-v1"),
                     (2, "scheduler"),
-                    (2, "scheduler-optimized"),
+                    (2, "scheduler-v1"),
                 )
             )
         ]
@@ -354,7 +437,7 @@ class PlotTests(unittest.TestCase):
             ("num_requests", "scheduler"),
         )
 
-    def test_plot_2d_draws_one_line_and_band_per_series(self):
+    def test_plot_2d_draws_three_stably_styled_scheduler_series(self):
         from matplotlib.axes import Axes
 
         records = [
@@ -365,32 +448,58 @@ class PlotTests(unittest.TestCase):
                     experiment_name=f"run-{index}",
                 ),
                 make_result(float(index + 1)),
+                workload_name=f"req-{requests}",
+                component_name=component,
             )
-            for index, (requests, scheduler) in enumerate(
+            for index, (requests, component, scheduler) in enumerate(
                 (
-                    (1, "scheduler"),
-                    (1, "scheduler-optimized"),
-                    (2, "scheduler"),
-                    (2, "scheduler-optimized"),
+                    (1, "baseline", "scheduler"),
+                    (1, "scheduler-v1", "scheduler-v1"),
+                    (1, "scheduler-v2", "scheduler-v2"),
+                    (2, "baseline", "scheduler"),
+                    (2, "scheduler-v1", "scheduler-v1"),
+                    (2, "scheduler-v2", "scheduler-v2"),
                 )
             )
         ]
 
         with (
             TemporaryDirectory() as temp_dir,
-            patch.object(plot, "_METRICS", (plot._METRICS[0],)),
             patch.object(Axes, "plot", autospec=True, wraps=Axes.plot) as lines,
             patch.object(Axes, "fill_between", autospec=True) as bands,
         ):
-            plot_2d(
+            paths = plot_2d(
                 records,
-                "num_requests",
-                "scheduler",
+                "workload",
+                "component",
                 output_dir=temp_dir,
             )
 
-        self.assertEqual(lines.call_count, 2)
-        self.assertEqual(bands.call_count, 2)
+        expected_styles = (
+            ("scheduler", "tab:blue", "o"),
+            ("scheduler-v1", "tab:orange", "s"),
+            ("scheduler-v2", "tab:green", "^"),
+        )
+        expected_line_styles = list(expected_styles) * len(plot._METRICS)
+        summary_metrics = sum(metric.summary for metric in plot._METRICS)
+        self.assertEqual(len(paths), 13)
+        self.assertEqual(lines.call_count, len(expected_line_styles))
+        self.assertEqual(bands.call_count, summary_metrics * 3)
+        self.assertEqual(
+            [
+                (
+                    call.kwargs["label"],
+                    call.kwargs["color"],
+                    call.kwargs["marker"],
+                )
+                for call in lines.call_args_list
+            ],
+            expected_line_styles,
+        )
+        self.assertEqual(
+            [call.kwargs["color"] for call in bands.call_args_list],
+            [style[1] for style in expected_styles] * summary_metrics,
+        )
 
     def test_plot_2d_scalar_metrics_do_not_draw_uncertainty_bands(self):
         from matplotlib.axes import Axes

@@ -200,17 +200,16 @@ temperature: 0
 repeats: 3
 enforce_eager: false
 
-component_name: [baseline, scheduler-optimized]
-scheduler: [scheduler, scheduler-optimized]
+component_name: [baseline, scheduler-v1, scheduler-v2]
+scheduler: [scheduler, scheduler-v1, scheduler-v2]
 block_manager: block_manager
 attention: attention
 sampler: sampler
 store_kvcache: store_kvcache
 ```
 
-This produces four runs in workload-first order:
-`baseline-input-512`, `scheduler-optimized-input-512`,
-`baseline-input-1024`, and `scheduler-optimized-input-1024`. The final run name
+This produces six runs in workload-first order, with `baseline`, `scheduler-v1`,
+and `scheduler-v2` evaluated for each input length. The final run name
 is always `<component_name>-<workload_name>`. Labels are required and must be
 unique whenever their set has more than one column; single-column sets default
 to `workload` and `baseline`.
@@ -238,9 +237,9 @@ while the final point of each sweep is expected to saturate the logical KV cache
 
 | Config | Fixed workload | Sweep values |
 | --- | --- | --- |
-| `baseline-req-sweeps.yaml` | input 256, output 256 | requests: 16, 32, 64, 128, 256 |
-| `baseline-input-sweeps.yaml` | 64 requests, output 256 | input: 128, 256, 512, 1024, 2048 |
-| `baseline-output-sweeps.yaml` | 128 requests, input 256 | output: 64, 128, 256, 512, 768 |
+| `baseline-req-sweeps.yaml` | input 256, output 256 | requests: 16, 32, 64, 128, 169, 196, 211, 212, 213, 256 |
+| `baseline-input-sweeps.yaml` | 64 requests, output 1 | input: 128, 256, 512, 1024, 2048 |
+| `baseline-output-sweeps.yaml` | 64 requests, input 1 | output: 128, 256, 512, 1024, 1280, 1536, 1537, 1792, 2048 |
 
 Reports produced by the earlier 4096-context workloads remain useful as
 historical characterization, but should not be mixed into a new baseline plot.
@@ -285,40 +284,53 @@ python experiments/experiment.py --plot-only \
   experiments/report/run-b.json
 ```
 
-### Scheduler Pareto confirmation suite
+### Scheduler comparison suite
 
-The `scheduler-pareto-*-ab.yaml` and `scheduler-pareto-*-ba.yaml` configs form
-a counterbalanced confirmation suite for `scheduler` and
-`scheduler-optimized`. AB uses measured seeds 1–10 with baseline first; BA uses
-seeds 11–20 with the component order reversed. Run the AB and BA sets as
-separate invocations because their generated experiment names intentionally
-match:
+The six `scheduler-comparison-*.yaml` configs compare the baseline `scheduler`,
+`scheduler-v1`, and `scheduler-v2` in a fixed order with measured seeds 1–10.
+The request, input, and output sweeps reuse the standalone baseline workloads;
+the prefill, KV-boundary, and decode groups target scheduler mechanisms:
 
 ```bash
 python experiments/experiment.py \
-  --config experiments/configs/scheduler-pareto-prefill-ab.yaml \
-  --config experiments/configs/scheduler-pareto-kv-ab.yaml \
-  --config experiments/configs/scheduler-pareto-decode-ab.yaml
-
-python experiments/experiment.py \
-  --config experiments/configs/scheduler-pareto-prefill-ba.yaml \
-  --config experiments/configs/scheduler-pareto-kv-ba.yaml \
-  --config experiments/configs/scheduler-pareto-decode-ba.yaml
+  --config experiments/configs/scheduler-comparison-req.yaml \
+  --config experiments/configs/scheduler-comparison-input.yaml \
+  --config experiments/configs/scheduler-comparison-output.yaml \
+  --config experiments/configs/scheduler-comparison-prefill.yaml \
+  --config experiments/configs/scheduler-comparison-kv.yaml \
+  --config experiments/configs/scheduler-comparison-decode.yaml
 ```
 
-Each measured repeat stores request-aligned latencies and input lengths, an
-output digest, and scheduler telemetry. Pass the explicit JSON paths produced by
-the two runs to the dedicated analyzer:
+Each group produces thirteen charts. Every chart places workload on the x-axis
+and draws all three schedulers together: baseline is a blue circle line, v1 is
+an orange square line, and v2 is a green triangle line. Uncertainty bands reuse
+their line color and the complete selector legend is outside the data area.
+
+Each measured repeat also stores request-aligned latencies and input lengths, an
+output digest, and scheduler telemetry. Pass all explicit JSON report paths to
+the dedicated analyzer:
 
 ```bash
 python experiments/analyze_scheduler.py \
-  --reports path/to/ab-report.json path/to/ba-report.json \
-  --output-dir "experiments/report/scheduler optimization v2"
+  --reports path/to/baseline-report.json path/to/v1-report.json \
+    path/to/v2-report.json ... \
+  --reference-selector scheduler \
+  --candidate-selectors scheduler-v1 scheduler-v2 \
+  --output-dir "experiments/report/scheduler-comparison"
 ```
 
-The analyzer pairs equal seeds, excludes token or digest mismatches, computes
-10,000-sample bootstrap confidence intervals, classifies Pareto dominance or a
-tradeoff, and writes Markdown, CSV, and two diagnostic figures.
+The analyzer pairs each candidate with the baseline at equal seeds, excludes a
+candidate pair when its token totals or output digest differ, computes
+10,000-sample bootstrap confidence intervals, and writes a combined Markdown,
+CSV, Pareto figure, and three-scheduler mechanism figure.
+
+The v2 scheduler deliberately keeps linear queue scans. Prefill eligibility
+depends on the remaining token budget, current allocation state, queue-head
+history, and prefix-cache behavior, so a static priority key cannot represent
+the next valid candidate. Maintaining a heap would add invalidation and update
+work while still requiring feasibility checks; the single-pass deferred queue
+instead guarantees at most one candidate inspection per scheduling call while
+preserving v1 decisions.
 
 Only the explicitly listed reports form the plotting group. They must contain
 compatible `experiment_config` and result payloads. Reports containing only the
