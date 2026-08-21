@@ -200,6 +200,8 @@ class Reporter:
         *,
         output_path: Path | None = None,
         experiment_config: BenchmarkConfig | None = None,
+        workload_name: str | None = None,
+        component_name: str | None = None,
     ) -> Path:
         """Save a benchmark result as a structured JSON report."""
         report_path = output_path or REPORT_DIR / (
@@ -209,6 +211,10 @@ class Reporter:
         report: dict[str, Any] = {"experiment_name": experiment_name}
         if experiment_config is not None:
             report["experiment_config"] = asdict(experiment_config)
+        if workload_name is not None:
+            report["workload_name"] = workload_name
+        if component_name is not None:
+            report["component_name"] = component_name
         report["configuration"] = asdict(configuration)
         report["result"] = asdict(bench_result)
         report_path.write_text(

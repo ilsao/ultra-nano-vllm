@@ -93,6 +93,45 @@ class BenchmarkCliArgumentTests(unittest.TestCase):
         ):
             benchmark_cli.parse_args()
 
+    def test_accepts_alternate_input_len_and_validates_its_context(self):
+        with patch(
+            "sys.argv",
+            [
+                "benchmark.py",
+                "--input-len",
+                "2",
+                "--alternate-input-len",
+                "7",
+                "--output-len",
+                "1",
+                "--max-model-len",
+                "8",
+            ],
+        ):
+            config = benchmark_cli.parse_args()
+
+        self.assertEqual(config.alternate_input_len, 7)
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "benchmark.py",
+                    "--input-len",
+                    "2",
+                    "--alternate-input-len",
+                    "8",
+                    "--output-len",
+                    "1",
+                    "--max-model-len",
+                    "8",
+                ],
+            ),
+            patch("sys.stderr", new=StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            benchmark_cli.parse_args()
+
 class SyntheticWorkloadTests(unittest.TestCase):
     def test_fixed_lengths_vocab_range_and_seed(self):
         kwargs = dict(
@@ -122,6 +161,30 @@ class SyntheticWorkloadTests(unittest.TestCase):
         )
         self.assertTrue(all(request.sampling_params.max_tokens == 5 for request in first))
         self.assertTrue(all(request.sampling_params.ignore_eos for request in first))
+
+    def test_alternates_input_lengths_deterministically(self):
+        kwargs = dict(
+            num_requests=5,
+            input_len=4,
+            alternate_input_len=2,
+            output_len=1,
+            seed=7,
+            temperature=0.0,
+            vocab_size=11,
+            max_model_len=5,
+        )
+
+        first = workloads.synthetic_workload(**kwargs)
+        second = workloads.synthetic_workload(**kwargs)
+
+        self.assertEqual(
+            [len(request.prompt_token_ids) for request in first],
+            [4, 2, 4, 2, 4],
+        )
+        self.assertEqual(
+            [request.prompt_token_ids for request in first],
+            [request.prompt_token_ids for request in second],
+        )
 
     def test_does_not_change_global_random_state(self):
         random.seed(123)
@@ -160,6 +223,40 @@ class SyntheticWorkloadTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "exceeds max_model_len"):
             workloads.synthetic_workload(**{**valid, "output_len": 2})
+        with self.assertRaisesRegex(ValueError, "alternate_input_len"):
+            workloads.synthetic_workload(
+                **{**valid, "alternate_input_len": 0}
+            )
+        with self.assertRaisesRegex(ValueError, "exceeds max_model_len"):
+            workloads.synthetic_workload(
+                **{**valid, "alternate_input_len": 2}
+            )
+
+    def test_make_workload_forwards_alternate_length_and_effective_limit(self):
+        config = benchmark_cli.BenchmarkConfig(
+            num_requests=3,
+            input_len=4,
+            alternate_input_len=2,
+            output_len=1,
+        )
+        runner = SimpleNamespace(vocab_size=11, max_model_len=5)
+
+        with patch(
+            "benchmarks.benchmark.workloads.synthetic_workload",
+            return_value=[],
+        ) as synthetic:
+            benchmark_cli.make_workload(config, runner, seed=7, num_requests=3)
+
+        synthetic.assert_called_once_with(
+            num_requests=3,
+            input_len=4,
+            alternate_input_len=2,
+            output_len=1,
+            seed=7,
+            temperature=0.6,
+            vocab_size=11,
+            max_model_len=5,
+        )
 
 
 class BenchmarkRunnerTests(unittest.TestCase):
@@ -658,6 +755,7 @@ class ReporterTests(unittest.TestCase):
         experiment_config = benchmark_cli.BenchmarkConfig(
             num_requests=1,
             input_len=2,
+            alternate_input_len=4,
             output_len=3,
             seed=7,
             temperature=0.8,
@@ -673,12 +771,17 @@ class ReporterTests(unittest.TestCase):
                 "sweep-one",
                 output_path=output_path,
                 experiment_config=experiment_config,
+                workload_name="one",
+                component_name="baseline",
             )
             report = json.loads(output_path.read_text(encoding="utf-8"))
 
         self.assertEqual(saved_path, output_path)
         self.assertEqual(report["experiment_config"]["input_len"], 2)
+        self.assertEqual(report["experiment_config"]["alternate_input_len"], 4)
         self.assertEqual(report["experiment_config"]["temperature"], 0.8)
+        self.assertEqual(report["workload_name"], "one")
+        self.assertEqual(report["component_name"], "baseline")
         self.assertEqual(report["configuration"]["model"], "Qwen3-0.6B")
 
 
@@ -712,6 +815,7 @@ class BenchmarkCliTests(unittest.TestCase):
         reporter.warmup.return_value = MagicMock()
         reporter.track_repeats.return_value = range(3)
         runner = Mock()
+        runner.max_model_len = 8192
         runner.run_benchmark.side_effect = ["run-1", "run-2", "run-3"]
         aggregate = Mock()
 
@@ -749,6 +853,7 @@ class BenchmarkCliTests(unittest.TestCase):
         reporter.warmup.return_value = MagicMock()
         reporter.track_repeats.return_value = range(1)
         runner = Mock()
+        runner.max_model_len = 8192
         runner.run_benchmark.return_value = "run"
 
         with (
@@ -774,6 +879,7 @@ class BenchmarkCliTests(unittest.TestCase):
         reporter = Mock()
         reporter.warmup.return_value = MagicMock()
         runner = Mock()
+        runner.max_model_len = 8192
         runner.warmup.side_effect = RuntimeError("warmup failed")
 
         with (
@@ -787,6 +893,35 @@ class BenchmarkCliTests(unittest.TestCase):
                 close_runner=True,
             )
 
+        runner.close.assert_called_once_with()
+
+    def test_rejects_effective_context_limit_before_warmup(self):
+        config = benchmark_cli.BenchmarkConfig(
+            input_len=4,
+            alternate_input_len=7,
+            output_len=1,
+            max_model_len=8,
+            experiment_name="effective-limit",
+        )
+        reporter = Mock()
+        runner = Mock()
+        runner.max_model_len = 6
+
+        with (
+            patch("benchmarks.benchmark.BenchmarkRunner", return_value=runner),
+            self.assertRaisesRegex(
+                ValueError,
+                r"effective-limit.*7 \+ 1 = 8.*effective max_model_len \(6\)"
+                r".*requested max_model_len was 8",
+            ),
+        ):
+            benchmark_cli.execute_benchmark(
+                config,
+                reporter,
+                close_runner=True,
+            )
+
+        reporter.warmup.assert_not_called()
         runner.close.assert_called_once_with()
 
     def test_main_delegates_rendering_and_saving_to_reporter(self):

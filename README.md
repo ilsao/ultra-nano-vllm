@@ -50,8 +50,8 @@ flowchart TD
     YAML["Experiment YAML"] --> RESOLVE["config.py<br/>normalize + resolve overrides"]
     OVERRIDE["CLI overrides"] --> RESOLVE
     COMPONENT["EngineComponent selectors<br/>(opaque dimensions)"] --> RESOLVE
-    RESOLVE --> SWEEP["sweep.py<br/>deterministic Cartesian product"]
-    SWEEP --> VALIDATE["Preflight grid validation<br/>complete grid, 0–2 dimensions"]
+    RESOLVE --> SWEEP["sweep.py<br/>zip columns + cross two axes"]
+    SWEEP --> VALIDATE["Preflight validation<br/>labeled workload/component grid"]
     VALIDATE --> ORCHESTRATE["experiment.py<br/>group orchestration"]
     ORCHESTRATE --> SPAWN["runner.py<br/>fresh spawned worker"]
     SCALAR --> EXECUTE["execute_benchmark"]
@@ -64,11 +64,11 @@ flowchart TD
     EOUTPUT --> DISPATCH{"Varying dimensions"}
     DISPATCH -->|0D| RESULT["Result only"]
     DISPATCH -->|1D| LINE["13 line plots"]
-    DISPATCH -->|2D| HEATMAP["13 heatmaps"]
+    DISPATCH -->|2D| MULTILINE["13 multi-series line plots"]
     EOUTPUT --> EREPORT["experiments/report/"]
     RESULT --> EREPORT
     LINE --> EREPORT
-    HEATMAP --> EREPORT
+    MULTILINE --> EREPORT
     JSON["Explicit report JSON"] --> LOAD["plot.py<br/>load + validate reports"]
     LOAD --> DISPATCH
 ```
@@ -80,7 +80,7 @@ flowchart TD
 | `benchmarks/benchmark.py` | Defines one scalar benchmark configuration and measurement lifecycle. |
 | `benchmarks/runner.py` | Adapts a workload to the LLM API and captures runtime and KV-cache block usage. |
 | `experiments/config.py` | Loads YAML, applies overrides, infers dimensions, and validates grids. |
-| `experiments/sweep.py` | Expands normalized options in deterministic Cartesian-product order. |
+| `experiments/sweep.py` | Zips positional columns per axis, then crosses workloads with component configurations. |
 | `experiments/experiment.py` | Orchestrates groups, parent-side reporting, and plot dispatch. |
 | `experiments/runner.py` | Runs each scalar configuration in a fresh spawned process. |
 | `experiments/plot.py` | Loads reports and renders dimension-specific comparisons. |
@@ -90,7 +90,7 @@ Architecture invariants:
 
 - Benchmark and experiment entrypoints remain engine-agnostic.
 - Each YAML file forms an independent plotting group.
-- Complete, unique grids of at most two dimensions are validated before GPU work.
+- Complete, unique workload-by-component grids are validated before GPU work.
 - Scalar experiment runs are sequential, process-isolated, and request explicit cleanup.
 - Typed results return to the parent process for reporting and plotting.
 - Plot-only mode reads only the report files explicitly supplied by the user.
@@ -164,6 +164,9 @@ sampling. Add `--enforce-eager` to disable CUDA graph execution.
 `input_len + output_len` must not exceed `max_model_len`. The engine also caps
 the effective value at the model's `max_position_embeddings`. The field defaults
 to `8192` when omitted; repository experiment configs also set it explicitly.
+Use `--alternate-input-len` to make every second request use a different prompt
+length. Both prompt lengths are checked against the requested and effective
+maximum model length before warmup begins.
 
 The benchmark prints a Rich result table and writes a JSON report under
 `benchmarks/report/`. Each report includes workload totals, median/minimum/
@@ -175,12 +178,16 @@ utilization.
 
 ## Run controlled experiments
 
-An experiment YAML may provide either one value or a list of values for each
-field. Lists are expanded as a deterministic Cartesian product. Every expanded
-run needs a unique `experiment_name`.
+An experiment YAML defines two independent sets of positional columns. All
+non-component fields are zipped into workload columns, while the five component
+selectors are zipped into component columns. Scalars and one-element lists are
+broadcast within their set; every other list must match that set's column count.
+The two sets are then crossed, with each workload running against every component
+configuration.
 
 ```yaml
 model: ~/huggingface/Qwen3-0.6B/
+workload_name: [input-512, input-1024]
 num_requests: 256
 input_len: [512, 1024]
 output_len: 256
@@ -188,23 +195,24 @@ max_model_len: 8192
 seed: 0
 temperature: 0
 repeats: 3
-enforce_eager: [false, true]
+enforce_eager: false
 
-scheduler: scheduler
+component_name: [baseline, scheduler-optimized]
+scheduler: [scheduler, scheduler-optimized]
 block_manager: block_manager
 attention: attention
 sampler: sampler
 store_kvcache: store_kvcache
-
-experiment_name:
-  - input-512-cuda-graph
-  - input-512-eager
-  - input-1024-cuda-graph
-  - input-1024-eager
 ```
 
-This is a complete two-dimensional grid (`input_len` × `enforce_eager`). Run it
-with:
+This produces four runs in workload-first order:
+`baseline-input-512`, `scheduler-optimized-input-512`,
+`baseline-input-1024`, and `scheduler-optimized-input-1024`. The final run name
+is always `<component_name>-<workload_name>`. Labels are required and must be
+unique whenever their set has more than one column; single-column sets default
+to `workload` and `baseline`.
+
+Run it with:
 
 ```bash
 python experiments/experiment.py --config experiments/configs/your-config.yaml
@@ -243,19 +251,23 @@ python experiments/experiment.py \
   --repeats 5
 ```
 
-Experiment groups may vary at most two scalar, component, or kernel dimensions.
-The complete grid and globally unique experiment names are validated before any
-GPU work begins. Every scalar configuration runs sequentially in a fresh
+Experiment groups have up to two conceptual dimensions: workload and component.
+Column lengths, resolved configuration uniqueness, the complete cross-product,
+and globally unique generated experiment names are validated before any GPU work
+begins. The removed YAML field `experiment_name` is rejected; use
+`workload_name` and `component_name` instead. Every scalar configuration runs
+sequentially in a fresh
 spawned process so CUDA graph pools, cached allocations, and NCCL process-group
 state cannot leak into the next measurement.
 
 Reports and PNG plots are written to `experiments/report/`:
 
 - 0 varying dimensions: Rich result and JSON report only.
-- 1 varying dimension: thirteen mean line charts; summarized metrics include
-  standard-deviation bands.
-- 2 varying dimensions: thirteen annotated mean heatmaps; summarized metric
-  cells also show standard deviation.
+- 1 varying dimension: thirteen mean line charts over workload or component
+  labels; summarized metrics include standard-deviation bands.
+- 2 varying dimensions: thirteen multi-series mean line charts with workload on
+  the x-axis and component configuration in the legend. Summarized metrics
+  include independent standard-deviation bands for every series.
 
 The thirteen plotted metrics cover elapsed time, latency p50/p90/p99, request,
 output, total, prefill, and decode throughput, prefill/decode time, and the two

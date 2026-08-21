@@ -1,0 +1,18 @@
+model: ~/huggingface/Qwen3-0.6B/
+workload_name: [output-256, output-384, output-511, output-512, output-513, output-768, output-1024]
+num_requests: 64
+input_len: 256
+alternate_input_len: 2048
+output_len: [256, 384, 511, 512, 513, 768, 1024]
+max_model_len: 8192
+seed: 0
+temperature: 0.0
+repeats: 7
+enforce_eager: false
+
+component_name: [baseline, scheduler-optimized]
+scheduler: [scheduler, scheduler-optimized]
+block_manager: block_manager
+attention: attention
+sampler: sampler
+store_kvcache: store_kvcache

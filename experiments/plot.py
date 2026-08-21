@@ -22,7 +22,12 @@ import numpy as np
 
 from benchmarks.benchmark import BenchmarkConfig
 from benchmarks.metrics import BenchmarkResult, MetricSummary
-from experiments.config import CONFIG_DIMENSIONS, config_dimension_value
+from experiments.config import (
+    CONFIG_DIMENSIONS,
+    EXPERIMENT_DIMENSIONS,
+    config_dimension_value,
+    validate_experiment_name,
+)
 from nanovllm.engine.component import EngineComponent
 
 
@@ -35,6 +40,8 @@ class PlotRecord:
 
     config: BenchmarkConfig
     result: BenchmarkResult
+    workload_name: str | None = None
+    component_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +152,25 @@ def infer_dimensions(records: Sequence[PlotRecord]) -> tuple[str, ...]:
     """Return config fields whose values vary, in BenchmarkConfig field order."""
     if not records:
         raise ValueError("at least one plot record is required")
+    labeled = [
+        record.workload_name is not None and record.component_name is not None
+        for record in records
+    ]
+    partially_labeled = [
+        (record.workload_name is None) != (record.component_name is None)
+        for record in records
+    ]
+    if any(partially_labeled) or (any(labeled) and not all(labeled)):
+        raise ValueError(
+            "experiment results must either all include workload/component "
+            "labels or all use the legacy unlabeled format"
+        )
+    if all(labeled):
+        return tuple(
+            dimension
+            for dimension in EXPERIMENT_DIMENSIONS
+            if len({_dimension_value(record, dimension) for record in records}) > 1
+        )
     return tuple(
         dimension
         for dimension in CONFIG_DIMENSIONS
@@ -215,10 +241,32 @@ def load_reports(paths: Sequence[str | Path]) -> list[PlotRecord]:
             else:
                 raise TypeError("experiment_config.engine_component must be an object")
             config = BenchmarkConfig(**decoded_config)
+            workload_name = report.get("workload_name")
+            component_name = report.get("component_name")
+            if (workload_name is None) != (component_name is None):
+                raise ValueError(
+                    "workload_name and component_name must be provided together"
+                )
+            if workload_name is not None:
+                if not isinstance(workload_name, str) or not isinstance(
+                    component_name, str
+                ):
+                    raise TypeError(
+                        "workload_name and component_name must be strings"
+                    )
+                validate_experiment_name(workload_name)
+                validate_experiment_name(component_name)
             result = _decode_result(raw_result)
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"could not load experiment report {path}: {exc}") from exc
-        records.append(PlotRecord(config=config, result=result))
+        records.append(
+            PlotRecord(
+                config=config,
+                result=result,
+                workload_name=workload_name,
+                component_name=component_name,
+            )
+        )
     return records
 
 
@@ -287,92 +335,103 @@ def plot_1d(
 def plot_2d(
     records: Sequence[PlotRecord],
     x_dimension: str,
-    y_dimension: str,
+    series_dimension: str,
     *,
     output_dir: str | Path = REPORT_DIR,
     plot_name: str = "experiment",
 ) -> list[Path]:
-    """Save one annotated heatmap per metric for a two-dimensional experiment."""
-    validate_grid(records, (x_dimension, y_dimension))
+    """Save one multi-series line chart per metric for a 2D experiment."""
+    validate_grid(records, (x_dimension, series_dimension))
     x_values = _ordered_values(records, x_dimension)
-    y_values = _ordered_values(records, y_dimension)
+    series_values = _ordered_values(records, series_dimension)
     by_coordinate = {
         (
             _dimension_value(record, x_dimension),
-            _dimension_value(record, y_dimension),
+            _dimension_value(record, series_dimension),
         ): record
         for record in records
     }
+    x_positions = np.arange(len(x_values))
     timestamp = _plot_timestamp()
     paths = []
+    markers = ("o", "s", "^", "D", "v", "P", "X", "*")
 
     for metric in _METRICS:
-        matrix = np.empty((len(y_values), len(x_values)), dtype=float)
-        annotations: list[list[str]] = []
-        for y_index, y_value in enumerate(y_values):
-            annotation_row = []
-            for x_index, x_value in enumerate(x_values):
-                value = metric.value(by_coordinate[(x_value, y_value)].result)
+        width = max(8.0, 1.2 * len(x_values))
+        figure, axis = plt.subplots(figsize=(width, 5.0))
+        for series_index, series_value in enumerate(series_values):
+            centers = []
+            lower_bounds = []
+            upper_bounds = []
+            for x_value in x_values:
+                value = metric.value(
+                    by_coordinate[(x_value, series_value)].result
+                )
                 if metric.summary:
                     assert isinstance(value, MetricSummary)
                     if value.mean is not None and value.standard_deviation is not None:
-                        matrix[y_index, x_index] = value.mean
-                        annotation_row.append(
-                            f"{value.mean:.2f}\n± {value.standard_deviation:.2f}"
-                        )
+                        centers.append(value.mean)
+                        lower_bounds.append(value.mean - value.standard_deviation)
+                        upper_bounds.append(value.mean + value.standard_deviation)
                     else:
-                        matrix[y_index, x_index] = value.median
-                        annotation_row.append(
-                            f"{value.median:.2f}\n"
-                            f"[{value.minimum:.2f}, {value.maximum:.2f}]"
-                        )
+                        centers.append(value.median)
+                        lower_bounds.append(value.minimum)
+                        upper_bounds.append(value.maximum)
                 else:
-                    scalar = float(value)
-                    matrix[y_index, x_index] = scalar
-                    annotation_row.append(f"{scalar:.2f}")
-            annotations.append(annotation_row)
+                    centers.append(float(value))
 
-        width = max(8.0, 1.7 * len(x_values))
-        height = max(5.0, 1.2 * len(y_values))
-        figure, axis = plt.subplots(figsize=(width, height))
-        image = axis.imshow(matrix, aspect="auto", cmap="viridis")
+            line = axis.plot(
+                x_positions,
+                centers,
+                marker=markers[series_index % len(markers)],
+                linewidth=2,
+                label=_format_dimension_value(series_value),
+            )[0]
+            if metric.summary:
+                axis.fill_between(
+                    x_positions,
+                    lower_bounds,
+                    upper_bounds,
+                    color=line.get_color(),
+                    alpha=0.16,
+                )
+
         axis.set_xticks(
-            range(len(x_values)),
+            x_positions,
             [_format_dimension_value(value) for value in x_values],
         )
-        axis.set_yticks(
-            range(len(y_values)),
-            [_format_dimension_value(value) for value in y_values],
-        )
         axis.set_xlabel(_format_dimension_name(x_dimension))
-        axis.set_ylabel(_format_dimension_name(y_dimension))
+        axis.set_ylabel(f"{metric.title} ({metric.unit})")
         axis.set_title(f"{plot_name}: {metric.title} ({metric.unit})")
-        figure.colorbar(image, ax=axis, label=metric.unit)
-        threshold = (float(matrix.min()) + float(matrix.max())) / 2
-        for y_index, row in enumerate(annotations):
-            for x_index, annotation in enumerate(row):
-                color = "white" if matrix[y_index, x_index] <= threshold else "black"
-                axis.text(
-                    x_index,
-                    y_index,
-                    annotation,
-                    ha="center",
-                    va="center",
-                    color=color,
-                    fontsize=8,
-                )
+        axis.legend(title=_format_dimension_name(series_dimension))
+        axis.grid(axis="y", alpha=0.3)
         figure.tight_layout()
         path = _output_path(
             output_dir,
             timestamp,
             plot_name,
-            f"2d-{x_dimension}-{y_dimension}",
+            f"2d-{x_dimension}-by-{series_dimension}",
             metric.name,
         )
         figure.savefig(path, dpi=150)
         plt.close(figure)
         paths.append(path)
     return paths
+
+
+def select_2d_dimensions(
+    records: Sequence[PlotRecord],
+    dimensions: Sequence[str],
+) -> tuple[str, str]:
+    """Choose an x and series dimension without special-casing field names."""
+    if len(dimensions) != 2:
+        raise ValueError("two dimensions are required for a 2D plot")
+    first, second = dimensions
+    first_is_numeric = _is_numeric_dimension(records, first)
+    second_is_numeric = _is_numeric_dimension(records, second)
+    if first_is_numeric != second_is_numeric:
+        return (first, second) if first_is_numeric else (second, first)
+    return first, second
 
 
 def _decode_result(raw: dict[str, object]) -> BenchmarkResult:
@@ -430,13 +489,23 @@ def _validate_dimensions(dimensions: Sequence[str]) -> None:
     if len(set(dimensions)) != len(dimensions):
         raise ValueError("plot dimensions must be distinct")
     unknown = [
-        dimension for dimension in dimensions if dimension not in CONFIG_DIMENSIONS
+        dimension
+        for dimension in dimensions
+        if dimension not in CONFIG_DIMENSIONS + EXPERIMENT_DIMENSIONS
     ]
     if unknown:
         raise ValueError("unknown plot dimensions: " + ", ".join(unknown))
 
 
 def _dimension_value(record: PlotRecord, dimension: str):
+    if dimension == "workload":
+        if record.workload_name is None:
+            raise ValueError("workload dimension requires labeled experiment results")
+        return record.workload_name
+    if dimension == "component":
+        if record.component_name is None:
+            raise ValueError("component dimension requires labeled experiment results")
+        return record.component_name
     return config_dimension_value(record.config, dimension)
 
 
@@ -452,6 +521,17 @@ def _ordered_values(records: Sequence[PlotRecord], dimension: str) -> list[objec
     ):
         values.sort()
     return values
+
+
+def _is_numeric_dimension(
+    records: Sequence[PlotRecord],
+    dimension: str,
+) -> bool:
+    return all(
+        isinstance(_dimension_value(record, dimension), (int, float))
+        and not isinstance(_dimension_value(record, dimension), bool)
+        for record in records
+    )
 
 
 def _format_dimension_name(name: str) -> str:

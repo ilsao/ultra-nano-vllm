@@ -49,10 +49,10 @@ class ExperimentTests(unittest.TestCase):
             second = Path(temp_dir) / "second.yaml"
             first.write_text(
                 "num_requests: [1, 2]\n"
-                "experiment_name: [first-one, first-two]\n",
+                "workload_name: [first-one, first-two]\n",
                 encoding="utf-8",
             )
-            second.write_text("experiment_name: second\n", encoding="utf-8")
+            second.write_text("workload_name: second\n", encoding="utf-8")
             args = experiment.parse_args(
                 [
                     "--config",
@@ -68,14 +68,14 @@ class ExperimentTests(unittest.TestCase):
             )
 
         self.assertEqual(len(args.groups), 2)
-        self.assertEqual(args.groups[0].dimensions, ("num_requests",))
+        self.assertEqual(args.groups[0].dimensions, ("workload",))
         self.assertEqual(
             [
                 config.experiment_name
                 for group in args.groups
                 for config in group.configs
             ],
-            ["first-one", "first-two", "second"],
+            ["baseline-first-one", "baseline-first-two", "baseline-second"],
         )
         self.assertTrue(
             all(
@@ -99,24 +99,16 @@ class ExperimentTests(unittest.TestCase):
             )
         )
 
-    def test_rejects_duplicate_names_name_override_and_high_dimensions(self):
+    def test_rejects_duplicate_labels_and_multi_run_name_override(self):
         with TemporaryDirectory() as temp_dir:
             duplicate = Path(temp_dir) / "duplicate.yaml"
             duplicate.write_text(
-                "num_requests: [1, 2]\nexperiment_name: [same, same]\n",
-                encoding="utf-8",
-            )
-            high = Path(temp_dir) / "high.yaml"
-            high.write_text(
-                "num_requests: [1, 2]\n"
-                "input_len: [10, 20]\n"
-                "seed: [0, 1]\n"
-                "experiment_name: [a, b, c, d, e, f, g, h]\n",
+                "num_requests: [1, 2]\nworkload_name: [same, same]\n",
                 encoding="utf-8",
             )
             unique = Path(temp_dir) / "unique.yaml"
             unique.write_text(
-                "num_requests: [1, 2]\nexperiment_name: [one, two]\n",
+                "num_requests: [1, 2]\nworkload_name: [one, two]\n",
                 encoding="utf-8",
             )
             cases = [
@@ -125,7 +117,6 @@ class ExperimentTests(unittest.TestCase):
                     ["--config", str(unique), "--experiment-name", "override"],
                     "multiple runs",
                 ),
-                (["--config", str(high)], "at most two"),
             ]
             for argv, message in cases:
                 with (
@@ -149,7 +140,11 @@ class ExperimentTests(unittest.TestCase):
             BenchmarkConfig(num_requests=1, experiment_name="first"),
             BenchmarkConfig(num_requests=2, experiment_name="second"),
         )
-        group = experiment.ExperimentGroup("group", configs, ("num_requests",))
+        runs = (
+            experiment.ExperimentRun(configs[0], "one", "baseline"),
+            experiment.ExperimentRun(configs[1], "two", "baseline"),
+        )
+        group = experiment.ExperimentGroup("group", runs, ("workload",))
         reporter = Mock()
         results = [
             (make_result(1.0), make_configuration()),
@@ -181,6 +176,17 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(reporter.save_result.call_count, 2)
         plotted_records = render.call_args.args[0]
         self.assertEqual([record.config for record in plotted_records], list(configs))
+        self.assertEqual(
+            [(record.workload_name, record.component_name) for record in plotted_records],
+            [("one", "baseline"), ("two", "baseline")],
+        )
+        self.assertEqual(
+            reporter.save_result.call_args_list[0].kwargs["workload_name"], "one"
+        )
+        self.assertEqual(
+            reporter.save_result.call_args_list[0].kwargs["component_name"],
+            "baseline",
+        )
         reporter.show_plot_paths.assert_called_once_with(chart_paths)
         self.assertEqual(returned, chart_paths)
 

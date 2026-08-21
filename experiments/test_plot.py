@@ -17,6 +17,7 @@ from experiments.plot import (
     load_reports,
     plot_1d,
     plot_2d,
+    select_2d_dimensions,
     validate_grid,
 )
 from nanovllm import EngineComponent
@@ -90,6 +91,95 @@ class PlotTests(unittest.TestCase):
 
         self.assertEqual(infer_dimensions(records), ("scheduler",))
         self.assertEqual(validate_grid(records), ("scheduler",))
+
+    def test_labeled_records_use_conceptual_dimensions(self):
+        records = [
+            PlotRecord(
+                BenchmarkConfig(
+                    num_requests=requests,
+                    input_len=input_len,
+                    seed=seed,
+                    engine_component=EngineComponent(scheduler=scheduler),
+                    experiment_name=f"{component}-{workload}",
+                ),
+                make_result(float(index + 1)),
+                workload,
+                component,
+            )
+            for index, (workload, requests, input_len, seed, component, scheduler)
+            in enumerate(
+                (
+                    ("small", 1, 10, 3, "baseline", "scheduler"),
+                    ("small", 1, 10, 3, "optimized", "optimized-scheduler-v1"),
+                    ("large", 2, 20, 4, "baseline", "scheduler"),
+                    ("large", 2, 20, 4, "optimized", "optimized-scheduler-v1"),
+                )
+            )
+        ]
+
+        self.assertEqual(infer_dimensions(records), ("workload", "component"))
+        self.assertEqual(validate_grid(records), ("workload", "component"))
+        self.assertEqual(
+            plot._ordered_values(records, "workload"), ["small", "large"]
+        )
+
+        with TemporaryDirectory() as temp_dir, patch.object(
+            plot, "_METRICS", (plot._METRICS[0],)
+        ):
+            paths = plot_2d(
+                records,
+                "workload",
+                "component",
+                output_dir=temp_dir,
+            )
+        self.assertEqual(len(paths), 1)
+        self.assertIn("2d-workload-by-component", paths[0].name)
+
+    def test_labeled_records_cover_zero_and_each_one_dimensional_case(self):
+        result = make_result(1.0)
+        scalar = [
+            PlotRecord(BenchmarkConfig(), result, "only", "baseline")
+        ]
+        workloads = [
+            PlotRecord(
+                BenchmarkConfig(num_requests=value),
+                result,
+                f"requests-{value}",
+                "baseline",
+            )
+            for value in (1, 2)
+        ]
+        components = [
+            PlotRecord(
+                BenchmarkConfig(
+                    engine_component=EngineComponent(scheduler=selector)
+                ),
+                result,
+                "only",
+                name,
+            )
+            for name, selector in (
+                ("baseline", "scheduler"),
+                ("optimized", "optimized-scheduler-v1"),
+            )
+        ]
+
+        self.assertEqual(validate_grid(scalar), ())
+        self.assertEqual(validate_grid(workloads), ("workload",))
+        self.assertEqual(validate_grid(components), ("component",))
+
+    def test_rejects_mixed_or_partial_column_labels(self):
+        config = BenchmarkConfig()
+        result = make_result(1.0)
+        with self.assertRaisesRegex(ValueError, "all include"):
+            infer_dimensions(
+                [
+                    PlotRecord(config, result, "workload", "baseline"),
+                    PlotRecord(config, result),
+                ]
+            )
+        with self.assertRaisesRegex(ValueError, "all include"):
+            infer_dimensions([PlotRecord(config, result, "workload", None)])
 
     def test_plot_1d_saves_all_metric_files(self):
         records = [
@@ -199,16 +289,22 @@ class PlotTests(unittest.TestCase):
                 )
             )
         ]
-        matrices = []
-        original_imshow = Axes.imshow
+        plotted_series = []
+        original_plot = Axes.plot
 
-        def capture_matrix(axis, matrix, *args, **kwargs):
-            matrices.append(np.array(matrix, copy=True))
-            return original_imshow(axis, matrix, *args, **kwargs)
+        def capture_series(axis, x_values, y_values, *args, **kwargs):
+            plotted_series.append(
+                (
+                    np.array(x_values, copy=True),
+                    np.array(y_values, copy=True),
+                    kwargs.get("label"),
+                )
+            )
+            return original_plot(axis, x_values, y_values, *args, **kwargs)
 
         with TemporaryDirectory() as temp_dir, patch.object(
             plot, "_METRICS", (plot._METRICS[0],)
-        ), patch.object(Axes, "imshow", autospec=True, side_effect=capture_matrix):
+        ), patch.object(Axes, "plot", autospec=True, side_effect=capture_series):
             paths = plot_2d(
                 records,
                 "num_requests",
@@ -226,10 +322,105 @@ class PlotTests(unittest.TestCase):
             plot._ordered_values(records, "temperature"),
             [0.1, 0.2],
         )
-        np.testing.assert_array_equal(
-            matrices[0],
-            np.array([[11.1, 21.1], [12.1, 22.1]]),
+        self.assertEqual([series[2] for series in plotted_series], ["0.1", "0.2"])
+        np.testing.assert_array_equal(plotted_series[0][0], np.array([0, 1]))
+        np.testing.assert_array_equal(plotted_series[0][1], np.array([11.1, 21.1]))
+        np.testing.assert_array_equal(plotted_series[1][1], np.array([12.1, 22.1]))
+
+    def test_selects_only_numeric_dimension_as_x_axis(self):
+        records = [
+            PlotRecord(
+                BenchmarkConfig(
+                    num_requests=requests,
+                    engine_component=EngineComponent(scheduler=scheduler),
+                    experiment_name=f"run-{index}",
+                ),
+                make_result(float(index + 1)),
+            )
+            for index, (requests, scheduler) in enumerate(
+                (
+                    (1, "scheduler"),
+                    (1, "scheduler-optimized"),
+                    (2, "scheduler"),
+                    (2, "scheduler-optimized"),
+                )
+            )
+        ]
+
+        self.assertEqual(
+            select_2d_dimensions(records, ("scheduler", "num_requests")),
+            ("num_requests", "scheduler"),
         )
+
+    def test_plot_2d_draws_one_line_and_band_per_series(self):
+        from matplotlib.axes import Axes
+
+        records = [
+            PlotRecord(
+                BenchmarkConfig(
+                    num_requests=requests,
+                    engine_component=EngineComponent(scheduler=scheduler),
+                    experiment_name=f"run-{index}",
+                ),
+                make_result(float(index + 1)),
+            )
+            for index, (requests, scheduler) in enumerate(
+                (
+                    (1, "scheduler"),
+                    (1, "scheduler-optimized"),
+                    (2, "scheduler"),
+                    (2, "scheduler-optimized"),
+                )
+            )
+        ]
+
+        with (
+            TemporaryDirectory() as temp_dir,
+            patch.object(plot, "_METRICS", (plot._METRICS[0],)),
+            patch.object(Axes, "plot", autospec=True, wraps=Axes.plot) as lines,
+            patch.object(Axes, "fill_between", autospec=True) as bands,
+        ):
+            plot_2d(
+                records,
+                "num_requests",
+                "scheduler",
+                output_dir=temp_dir,
+            )
+
+        self.assertEqual(lines.call_count, 2)
+        self.assertEqual(bands.call_count, 2)
+
+    def test_plot_2d_scalar_metrics_do_not_draw_uncertainty_bands(self):
+        from matplotlib.axes import Axes
+
+        records = [
+            PlotRecord(
+                BenchmarkConfig(
+                    num_requests=requests,
+                    enforce_eager=eager,
+                    experiment_name=f"run-{index}",
+                ),
+                make_result(float(index + 1)),
+            )
+            for index, (requests, eager) in enumerate(
+                ((1, False), (1, True), (2, False), (2, True))
+            )
+        ]
+
+        with (
+            TemporaryDirectory() as temp_dir,
+            patch.object(plot, "_METRICS", (plot._METRICS[-1],)),
+            patch.object(Axes, "fill_between", autospec=True) as bands,
+        ):
+            paths = plot_2d(
+                records,
+                "num_requests",
+                "enforce_eager",
+                output_dir=temp_dir,
+            )
+
+        self.assertEqual(len(paths), 1)
+        bands.assert_not_called()
 
     def test_plot_2d_supports_categorical_axes_and_saves_all_files(self):
         records = []
@@ -259,7 +450,7 @@ class PlotTests(unittest.TestCase):
             self.assertEqual(len(paths), 13)
             self.assertTrue(all(path.exists() for path in paths))
             self.assertTrue(
-                all("2d-model-enforce_eager" in path.name for path in paths)
+                all("2d-model-by-enforce_eager" in path.name for path in paths)
             )
 
     def test_rejects_duplicate_and_incomplete_grids(self):
@@ -300,10 +491,42 @@ class PlotTests(unittest.TestCase):
             records = load_reports([valid])
             self.assertEqual(records, [PlotRecord(config, result)])
 
+            labeled = Path(temp_dir) / "labeled.json"
+            labeled.write_text(
+                json.dumps(
+                    {
+                        "workload_name": "requests-1",
+                        "component_name": "baseline",
+                        "experiment_config": asdict(config),
+                        "result": asdict(result),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                load_reports([labeled]),
+                [PlotRecord(config, result, "requests-1", "baseline")],
+            )
+
+            partial = Path(temp_dir) / "partial-label.json"
+            partial.write_text(
+                json.dumps(
+                    {
+                        "workload_name": "requests-1",
+                        "experiment_config": asdict(config),
+                        "result": asdict(result),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "provided together"):
+                load_reports([partial])
+
             old = Path(temp_dir) / "old.json"
             old_config = asdict(config)
             old_config.pop("engine_component")
             old_config.pop("max_model_len")
+            old_config.pop("alternate_input_len")
             old.write_text(
                 json.dumps(
                     {

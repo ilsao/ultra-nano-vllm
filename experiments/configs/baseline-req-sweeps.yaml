@@ -1,4 +1,5 @@
 model: ~/huggingface/Qwen3-0.6B/
+workload_name: [req-16, req-32, req-64, req-128, req-169, req-196, req-211, req-212, req-213, req-256]
 num_requests: [16, 32, 64, 128, 169, 196, 211, 212, 213, 256]
 input_len: 256
 output_len: 256
@@ -8,20 +9,9 @@ temperature: 0.0
 repeats: 7
 enforce_eager: false
 
+component_name: baseline
 scheduler: scheduler
 block_manager: block_manager
 attention: attention
 sampler: sampler
 store_kvcache: store_kvcache
-
-experiment_name:
-  - baseline-req-16
-  - baseline-req-32
-  - baseline-req-64
-  - baseline-req-128
-  - baseline-req-169
-  - baseline-req-196
-  - baseline-req-211
-  - baseline-req-212
-  - baseline-req-213
-  - baseline-req-256
