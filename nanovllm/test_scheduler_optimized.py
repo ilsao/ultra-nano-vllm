@@ -43,6 +43,9 @@ class OptimizedSchedulerTests(unittest.TestCase):
         self.assertEqual(sum(seq.num_scheduled_tokens for seq in scheduled), 6)
         self.assertEqual(list(scheduler.waiting), [blocked])
         self.assertEqual(list(scheduler.running), [first, backfill])
+        telemetry = scheduler.get_scheduler_metrics()
+        self.assertEqual(telemetry.candidate_inspections, 3)
+        self.assertEqual(telemetry.backfill_selections, 1)
 
     def test_prefill_preserves_waiting_order_when_no_backfill_fits(self):
         with patch.object(Sequence, "block_size", 2):
@@ -118,6 +121,11 @@ class OptimizedSchedulerTests(unittest.TestCase):
         self.assertEqual(list(scheduler.running), [current, oldest, newest])
         scheduler.block_manager.deallocate.assert_called_once_with(smallest)
         scheduler.block_manager.may_append.assert_called_once_with(current)
+        telemetry = scheduler.get_scheduler_metrics()
+        self.assertEqual(telemetry.preemptions, 1)
+        self.assertEqual(telemetry.preempted_blocks, 1)
+        scheduler.reset_scheduler_metrics()
+        self.assertEqual(scheduler.get_scheduler_metrics().preemptions, 0)
 
     def test_preemption_tie_prefers_rightmost_sequence(self):
         scheduler = self.make_scheduler(max_num_seqs=1)

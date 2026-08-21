@@ -167,6 +167,9 @@ to `8192` when omitted; repository experiment configs also set it explicitly.
 Use `--alternate-input-len` to make every second request use a different prompt
 length. Both prompt lengths are checked against the requested and effective
 maximum model length before warmup begins.
+Use `--input-order alternating`, `primary-first`, or `alternate-first` to
+control whether the two prompt-length cohorts are interleaved or grouped. A
+non-default order requires `--alternate-input-len`.
 
 The benchmark prints a Rich result table and writes a JSON report under
 `benchmarks/report/`. Each report includes workload totals, median/minimum/
@@ -281,6 +284,41 @@ python experiments/experiment.py --plot-only \
   experiments/report/run-a.json \
   experiments/report/run-b.json
 ```
+
+### Scheduler Pareto confirmation suite
+
+The `scheduler-pareto-*-ab.yaml` and `scheduler-pareto-*-ba.yaml` configs form
+a counterbalanced confirmation suite for `scheduler` and
+`scheduler-optimized`. AB uses measured seeds 1–10 with baseline first; BA uses
+seeds 11–20 with the component order reversed. Run the AB and BA sets as
+separate invocations because their generated experiment names intentionally
+match:
+
+```bash
+python experiments/experiment.py \
+  --config experiments/configs/scheduler-pareto-prefill-ab.yaml \
+  --config experiments/configs/scheduler-pareto-kv-ab.yaml \
+  --config experiments/configs/scheduler-pareto-decode-ab.yaml
+
+python experiments/experiment.py \
+  --config experiments/configs/scheduler-pareto-prefill-ba.yaml \
+  --config experiments/configs/scheduler-pareto-kv-ba.yaml \
+  --config experiments/configs/scheduler-pareto-decode-ba.yaml
+```
+
+Each measured repeat stores request-aligned latencies and input lengths, an
+output digest, and scheduler telemetry. Pass the explicit JSON paths produced by
+the two runs to the dedicated analyzer:
+
+```bash
+python experiments/analyze_scheduler.py \
+  --reports path/to/ab-report.json path/to/ba-report.json \
+  --output-dir "experiments/report/scheduler optimization v2"
+```
+
+The analyzer pairs equal seeds, excludes token or digest mismatches, computes
+10,000-sample bootstrap confidence intervals, classifies Pareto dominance or a
+tradeoff, and writes Markdown, CSV, and two diagnostic figures.
 
 Only the explicitly listed reports form the plotting group. They must contain
 compatible `experiment_config` and result payloads. Reports containing only the

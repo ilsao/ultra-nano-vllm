@@ -2,6 +2,7 @@ from collections import deque
 
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence, SequenceStatus
+from nanovllm.engine.scheduler_metrics import SchedulerPolicyMetrics
 
 from utils.profiling import nvtx_annotate
 
@@ -15,12 +16,27 @@ class Scheduler:
         self.block_manager = block_manager
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
+        self.reset_scheduler_metrics()
 
     def reset_kvcache_metrics(self) -> None:
         self.block_manager.reset_peak_usage()
 
     def get_peak_kvcache_blocks(self) -> int:
         return self.block_manager.peak_used_blocks
+
+    def reset_scheduler_metrics(self) -> None:
+        self._candidate_inspections = 0
+        self._backfill_selections = 0
+        self._preemptions = 0
+        self._preempted_blocks = 0
+
+    def get_scheduler_metrics(self) -> SchedulerPolicyMetrics:
+        return SchedulerPolicyMetrics(
+            candidate_inspections=self._candidate_inspections,
+            backfill_selections=self._backfill_selections,
+            preemptions=self._preemptions,
+            preempted_blocks=self._preempted_blocks,
+        )
 
     def is_finished(self):
         return not self.waiting and not self.running
@@ -34,7 +50,9 @@ class Scheduler:
         allow_chunking: bool,
     ) -> tuple[Sequence, int, int] | None:
         """Return the first waiting sequence that can enter this batch."""
+        head = self.waiting[0]
         for seq in self.waiting:
+            self._candidate_inspections += 1
             if not seq.block_table:
                 num_cached_blocks = self.block_manager.can_allocate(seq)
                 if num_cached_blocks == -1:
@@ -47,6 +65,8 @@ class Scheduler:
                 num_tokens = seq.num_tokens - seq.num_cached_tokens
 
             if allow_chunking or num_tokens <= remaining:
+                if seq is not head:
+                    self._backfill_selections += 1
                 return seq, num_cached_blocks, num_tokens
         return None
 
@@ -137,6 +157,8 @@ class Scheduler:
     @nvtx_annotate("Scheduler.preempt")
     def preempt(self, seq: Sequence):
         """Move a running sequence back to the waiting queue."""
+        self._preemptions += 1
+        self._preempted_blocks += len(seq.block_table)
         seq.status = SequenceStatus.WAITING
         seq.is_prefill = True
         self.block_manager.deallocate(seq)

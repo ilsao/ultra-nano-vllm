@@ -11,6 +11,10 @@ from unittest.mock import MagicMock, Mock, call, patch
 
 from nanovllm import EngineComponent, SamplingParams
 from nanovllm.engine.llm_engine import LLMEngine
+from nanovllm.engine.scheduler_metrics import (
+    SchedulerMetrics,
+    SchedulerPolicyMetrics,
+)
 from rich.console import Console
 
 from benchmarks import benchmark as benchmark_cli
@@ -167,6 +171,7 @@ class SyntheticWorkloadTests(unittest.TestCase):
             num_requests=5,
             input_len=4,
             alternate_input_len=2,
+            input_order="alternating",
             output_len=1,
             seed=7,
             temperature=0.0,
@@ -184,6 +189,34 @@ class SyntheticWorkloadTests(unittest.TestCase):
         self.assertEqual(
             [request.prompt_token_ids for request in first],
             [request.prompt_token_ids for request in second],
+        )
+
+    def test_orders_primary_and_alternate_input_groups(self):
+        kwargs = dict(
+            num_requests=5,
+            input_len=4,
+            alternate_input_len=2,
+            output_len=1,
+            seed=7,
+            temperature=0.0,
+            vocab_size=11,
+            max_model_len=5,
+        )
+
+        primary_first = workloads.synthetic_workload(
+            **kwargs, input_order="primary-first"
+        )
+        alternate_first = workloads.synthetic_workload(
+            **kwargs, input_order="alternate-first"
+        )
+
+        self.assertEqual(
+            [len(request.prompt_token_ids) for request in primary_first],
+            [4, 4, 4, 2, 2],
+        )
+        self.assertEqual(
+            [len(request.prompt_token_ids) for request in alternate_first],
+            [2, 2, 4, 4, 4],
         )
 
     def test_does_not_change_global_random_state(self):
@@ -231,12 +264,19 @@ class SyntheticWorkloadTests(unittest.TestCase):
             workloads.synthetic_workload(
                 **{**valid, "alternate_input_len": 2}
             )
+        with self.assertRaisesRegex(ValueError, "input_order"):
+            workloads.synthetic_workload(**{**valid, "input_order": "invalid"})
+        with self.assertRaisesRegex(ValueError, "alternate_input_len is not set"):
+            workloads.synthetic_workload(
+                **{**valid, "input_order": "primary-first"}
+            )
 
     def test_make_workload_forwards_alternate_length_and_effective_limit(self):
         config = benchmark_cli.BenchmarkConfig(
             num_requests=3,
             input_len=4,
             alternate_input_len=2,
+            input_order="alternating",
             output_len=1,
         )
         runner = SimpleNamespace(vocab_size=11, max_model_len=5)
@@ -251,6 +291,7 @@ class SyntheticWorkloadTests(unittest.TestCase):
             num_requests=3,
             input_len=4,
             alternate_input_len=2,
+            input_order="alternating",
             output_len=1,
             seed=7,
             temperature=0.6,
@@ -368,6 +409,9 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(result.decode_time, 1.0)
         self.assertEqual(result.prefill_tokens, 3)
         self.assertEqual(result.decode_tokens, 3)
+        self.assertEqual(result.request_input_lengths, (2, 1))
+        self.assertEqual(len(result.output_digest), 64)
+        self.assertEqual(result.scheduler_metrics, SchedulerMetrics())
 
     def test_close_shuts_down_underlying_engine(self):
         runner = BenchmarkRunner.__new__(BenchmarkRunner)
@@ -379,6 +423,48 @@ class BenchmarkRunnerTests(unittest.TestCase):
 
 
 class LLMEngineLifecycleTests(unittest.TestCase):
+    def test_step_records_scheduler_time_and_prefill_batch_shape(self):
+        engine = LLMEngine.__new__(LLMEngine)
+        first = SimpleNamespace(
+            num_scheduled_tokens=3,
+            is_finished=False,
+            seq_id=1,
+            completion_token_ids=[],
+        )
+        second = SimpleNamespace(
+            num_scheduled_tokens=2,
+            is_finished=False,
+            seq_id=2,
+            completion_token_ids=[],
+        )
+        engine.scheduler = Mock()
+        engine.scheduler.schedule.return_value = ([first, second], True)
+        engine.model_runner = Mock()
+        engine.model_runner.config.max_num_batched_tokens = 8
+        engine.model_runner.call.return_value = [10, 11]
+        engine._scheduler_time = 0.0
+        engine._schedule_calls = 0
+        engine._prefill_steps = 0
+        engine._decode_steps = 0
+        engine._prefill_scheduled_tokens = 0
+        engine._prefill_capacity_tokens = 0
+        engine._prefill_scheduled_sequences = 0
+
+        with patch(
+            "nanovllm.engine.llm_engine.perf_counter",
+            side_effect=[1.0, 1.25],
+        ):
+            outputs, num_tokens = engine.step()
+
+        self.assertEqual(outputs, [])
+        self.assertEqual(num_tokens, 5)
+        self.assertEqual(engine._scheduler_time, 0.25)
+        self.assertEqual(engine._schedule_calls, 1)
+        self.assertEqual(engine._prefill_steps, 1)
+        self.assertEqual(engine._prefill_scheduled_tokens, 5)
+        self.assertEqual(engine._prefill_capacity_tokens, 8)
+        self.assertEqual(engine._prefill_scheduled_sequences, 2)
+
     def test_generate_records_phase_times_tokens_and_request_latencies(self):
         engine = LLMEngine.__new__(LLMEngine)
         engine.add_request = Mock()
@@ -388,6 +474,10 @@ class LLMEngineLifecycleTests(unittest.TestCase):
                 ([(0, [10])], 2),
                 ([(1, [20, 21])], -1),
             ]
+        )
+        engine.scheduler = Mock()
+        engine.scheduler.get_scheduler_metrics.return_value = (
+            SchedulerPolicyMetrics(candidate_inspections=7)
         )
         engine.tokenizer = SimpleNamespace(decode=lambda tokens: str(tokens))
 
@@ -416,6 +506,11 @@ class LLMEngineLifecycleTests(unittest.TestCase):
         self.assertEqual(engine.last_generation_metrics.decode_time, 3.0)
         self.assertEqual(engine.last_generation_metrics.prefill_tokens, 2)
         self.assertEqual(engine.last_generation_metrics.decode_tokens, 1)
+        self.assertEqual(
+            engine.last_generation_metrics.scheduler_metrics.candidate_inspections,
+            7,
+        )
+        engine.scheduler.reset_scheduler_metrics.assert_called_once_with()
 
     def test_exit_is_idempotent_and_releases_workers(self):
         engine = LLMEngine.__new__(LLMEngine)
@@ -782,6 +877,12 @@ class ReporterTests(unittest.TestCase):
         self.assertEqual(report["experiment_config"]["temperature"], 0.8)
         self.assertEqual(report["workload_name"], "one")
         self.assertEqual(report["component_name"], "baseline")
+        self.assertIn("git_commit", report["provenance"])
+        self.assertEqual(len(report["result"]["run_samples"]), 1)
+        self.assertIn(
+            "candidate_inspections",
+            report["result"]["run_samples"][0]["scheduler_metrics"],
+        )
         self.assertEqual(report["configuration"]["model"], "Qwen3-0.6B")
 
 
@@ -839,7 +940,14 @@ class BenchmarkCliTests(unittest.TestCase):
             engine_component=config.engine_component,
         )
 
-        self.assertEqual(runner.run_benchmark.call_count, 3)
+        self.assertEqual(
+            runner.run_benchmark.call_args_list,
+            [
+                call(["request"], seed=5),
+                call(["request"], seed=6),
+                call(["request"], seed=7),
+            ],
+        )
         reporter.warmup.assert_called_once_with()
         reporter.warmup_complete.assert_called_once_with()
         reporter.track_repeats.assert_called_once_with(3)

@@ -2,6 +2,7 @@ from collections import deque
 
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence, SequenceStatus
+from nanovllm.engine.scheduler_metrics import SchedulerPolicyMetrics
 
 from utils.profiling import nvtx_annotate
 
@@ -14,12 +15,27 @@ class Scheduler:
         self.block_manager = block_manager
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
+        self.reset_scheduler_metrics()
 
     def reset_kvcache_metrics(self) -> None:
         self.block_manager.reset_peak_usage()
 
     def get_peak_kvcache_blocks(self) -> int:
         return self.block_manager.peak_used_blocks
+
+    def reset_scheduler_metrics(self) -> None:
+        self._candidate_inspections = 0
+        self._backfill_selections = 0
+        self._preemptions = 0
+        self._preempted_blocks = 0
+
+    def get_scheduler_metrics(self) -> SchedulerPolicyMetrics:
+        return SchedulerPolicyMetrics(
+            candidate_inspections=self._candidate_inspections,
+            backfill_selections=self._backfill_selections,
+            preemptions=self._preemptions,
+            preempted_blocks=self._preempted_blocks,
+        )
 
     def is_finished(self):
         return not self.waiting and not self.running
@@ -50,6 +66,7 @@ class Scheduler:
         # Prefill sequences whose KV cache is not complete yet.
         while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
             # Classical FCFS, may cause efficiency issues
+            self._candidate_inspections += 1
             seq = self.waiting[0]
             # The number of tokens that can still be scheduled in this batch.
             remaining = self.max_num_batched_tokens - num_batched_tokens
@@ -109,6 +126,8 @@ class Scheduler:
     @nvtx_annotate("Scheduler.preempt")
     def preempt(self, seq: Sequence):
         """Move a running sequence back to the waiting queue."""
+        self._preemptions += 1
+        self._preempted_blocks += len(seq.block_table)
         seq.status = SequenceStatus.WAITING
         seq.is_prefill = True
         self.block_manager.deallocate(seq)

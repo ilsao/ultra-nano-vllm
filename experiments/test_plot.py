@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,6 +9,7 @@ import numpy as np
 
 from benchmarks.benchmark import BenchmarkConfig
 from benchmarks.metrics import BenchmarkResult, MetricSummary
+from benchmarks.runner import BatchRunResult
 from experiments.config import CONFIG_DIMENSIONS
 from experiments import plot
 from experiments.plot import (
@@ -21,6 +22,7 @@ from experiments.plot import (
     validate_grid,
 )
 from nanovllm import EngineComponent
+from nanovllm.engine.scheduler_metrics import SchedulerMetrics
 
 
 def make_result(value: float) -> BenchmarkResult:
@@ -490,6 +492,39 @@ class PlotTests(unittest.TestCase):
             )
             records = load_reports([valid])
             self.assertEqual(records, [PlotRecord(config, result)])
+
+            sample = BatchRunResult(
+                elapsed_time=2.0,
+                num_requests=2,
+                input_tokens=6,
+                output_tokens=2,
+                total_tokens=8,
+                peak_kvcache_blocks=3,
+                kvcache_capacity_blocks=10,
+                request_latencies=(1.0, 2.0),
+                prefill_time=0.5,
+                decode_time=1.5,
+                prefill_tokens=6,
+                decode_tokens=2,
+                request_input_lengths=(2, 4),
+                seed=1,
+                output_digest="digest",
+                scheduler_metrics=SchedulerMetrics(candidate_inspections=4),
+            )
+            sampled_result = replace(result, run_samples=(sample,))
+            sampled = Path(temp_dir) / "sampled.json"
+            sampled.write_text(
+                json.dumps(
+                    {
+                        "experiment_config": asdict(config),
+                        "result": asdict(sampled_result),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                load_reports([sampled]), [PlotRecord(config, sampled_result)]
+            )
 
             labeled = Path(temp_dir) / "labeled.json"
             labeled.write_text(

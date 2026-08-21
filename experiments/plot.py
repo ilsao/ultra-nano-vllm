@@ -22,6 +22,7 @@ import numpy as np
 
 from benchmarks.benchmark import BenchmarkConfig
 from benchmarks.metrics import BenchmarkResult, MetricSummary
+from benchmarks.runner import BatchRunResult
 from experiments.config import (
     CONFIG_DIMENSIONS,
     EXPERIMENT_DIMENSIONS,
@@ -29,6 +30,7 @@ from experiments.config import (
     validate_experiment_name,
 )
 from nanovllm.engine.component import EngineComponent
+from nanovllm.engine.scheduler_metrics import SchedulerMetrics
 
 
 REPORT_DIR = Path(__file__).resolve().parent / "report"
@@ -436,6 +438,9 @@ def select_2d_dimensions(
 
 def _decode_result(raw: dict[str, object]) -> BenchmarkResult:
     decoded = dict(raw)
+    raw_samples = decoded.pop("run_samples", [])
+    if not isinstance(raw_samples, list):
+        raise TypeError("result.run_samples must be an array")
     if (
         "peak_kvcache_blocks" not in decoded
         or "peak_kvcache_utilization" not in decoded
@@ -482,6 +487,22 @@ def _decode_result(raw: dict[str, object]) -> BenchmarkResult:
         if not isinstance(value, dict):
             raise TypeError(f"result.{field_name} must be an object")
         decoded[field_name] = MetricSummary(**value)
+    samples = []
+    for raw_sample in raw_samples:
+        if not isinstance(raw_sample, dict):
+            raise TypeError("every result.run_samples entry must be an object")
+        sample = dict(raw_sample)
+        raw_scheduler_metrics = sample.get("scheduler_metrics", {})
+        if not isinstance(raw_scheduler_metrics, dict):
+            raise TypeError("run sample scheduler_metrics must be an object")
+        sample["scheduler_metrics"] = SchedulerMetrics(**raw_scheduler_metrics)
+        for tuple_field in ("request_latencies", "request_input_lengths"):
+            value = sample.get(tuple_field, [])
+            if not isinstance(value, list):
+                raise TypeError(f"run sample {tuple_field} must be an array")
+            sample[tuple_field] = tuple(value)
+        samples.append(BatchRunResult(**sample))
+    decoded["run_samples"] = tuple(samples)
     return BenchmarkResult(**decoded)
 
 

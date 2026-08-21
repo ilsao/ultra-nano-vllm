@@ -36,6 +36,7 @@ class BenchmarkConfig:
     engine_component: EngineComponent = field(default_factory=EngineComponent)
     experiment_name: str = DEFAULT_EXPERIMENT_NAME
     alternate_input_len: int | None = None
+    input_order: str = "alternating"
 
     def __post_init__(self) -> None:
         for field in fields(self):
@@ -44,6 +45,10 @@ class BenchmarkConfig:
                     raise TypeError("engine_component must be EngineComponent")
                 continue
             validate_field_value(field.name, getattr(self, field.name))
+        if self.alternate_input_len is None and self.input_order != "alternating":
+            raise ValueError(
+                "input_order must be alternating when alternate_input_len is not set"
+            )
 
 
 def experiment_name(value: str) -> str:
@@ -67,6 +72,7 @@ def add_benchmark_arguments(
         - num-requests
         - input-len
         - alternate-input-len
+        - input-order
         - output-len
         - max-model-len
         - seed
@@ -104,6 +110,12 @@ def add_benchmark_arguments(
             "Optional prompt length used by every second request, starting "
             "with --input-len for the first request."
         ),
+    )
+    parser.add_argument(
+        "--input-order",
+        choices=("alternating", "primary-first", "alternate-first"),
+        default=default("input_order"),
+        help="Ordering of primary and alternate input lengths.",
     )
     parser.add_argument(
         "--output-len",
@@ -177,6 +189,7 @@ def make_workload(
         num_requests=num_requests,
         input_len=config.input_len,
         alternate_input_len=config.alternate_input_len,
+        input_order=config.input_order,
         output_len=config.output_len,
         seed=seed,
         temperature=config.temperature,
@@ -228,7 +241,12 @@ def execute_benchmark(
                 config.seed + 1 + run_index,
                 num_requests=config.num_requests,
             )
-            run_results.append(runner.run_benchmark(benchmark_requests))
+            run_results.append(
+                runner.run_benchmark(
+                    benchmark_requests,
+                    seed=config.seed + 1 + run_index,
+                )
+            )
 
         result = metrics.compute_benchmark_result(run_results)
         return result, runner.configuration

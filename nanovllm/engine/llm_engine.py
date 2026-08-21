@@ -1,5 +1,5 @@
 import atexit
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
@@ -10,6 +10,10 @@ from nanovllm.engine.component import EngineComponent
 from nanovllm.sampling_params import SamplingParams
 from nanovllm.engine.sequence import Sequence
 from nanovllm.engine.model_runner import ModelRunner
+from nanovllm.engine.scheduler_metrics import (
+    SchedulerMetrics,
+    SchedulerPolicyMetrics,
+)
 
 from utils.profiling import nvtx_annotate
 
@@ -20,6 +24,7 @@ class GenerationMetrics:
     decode_time: float
     prefill_tokens: int
     decode_tokens: int
+    scheduler_metrics: SchedulerMetrics = field(default_factory=SchedulerMetrics)
 
 
 class LLMEngine:
@@ -126,7 +131,21 @@ class LLMEngine:
                 the number of tokens scheduled in the prefill phase. If negative, it
                 indicates the number of sequences processed in the decode phase.
         """
+        schedule_start = perf_counter()
         seqs, is_prefill = self.scheduler.schedule()
+        self._scheduler_time += perf_counter() - schedule_start
+        self._schedule_calls += 1
+        if is_prefill:
+            self._prefill_steps += 1
+            self._prefill_scheduled_tokens += sum(
+                seq.num_scheduled_tokens for seq in seqs
+            )
+            self._prefill_capacity_tokens += (
+                self.model_runner.config.max_num_batched_tokens
+            )
+            self._prefill_scheduled_sequences += len(seqs)
+        else:
+            self._decode_steps += 1
 
         # If we are in the prefill phase, count the number of scheduled tokens.
         # If we are in the decode phase, return the negative number of sequences
@@ -188,6 +207,19 @@ class LLMEngine:
 
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
+        scheduler = getattr(self, "scheduler", None)
+        reset_scheduler_metrics = getattr(
+            scheduler, "reset_scheduler_metrics", None
+        )
+        if reset_scheduler_metrics is not None:
+            reset_scheduler_metrics()
+        self._scheduler_time = 0.0
+        self._schedule_calls = 0
+        self._prefill_steps = 0
+        self._decode_steps = 0
+        self._prefill_scheduled_tokens = 0
+        self._prefill_capacity_tokens = 0
+        self._prefill_scheduled_sequences = 0
         outputs = {}
         request_latencies = {}
         generation_start = perf_counter()
@@ -222,6 +254,14 @@ class LLMEngine:
                 pbar.update(1)
         pbar.close()
 
+        get_scheduler_metrics = getattr(
+            scheduler, "get_scheduler_metrics", None
+        )
+        policy_metrics = (
+            get_scheduler_metrics()
+            if get_scheduler_metrics is not None
+            else SchedulerPolicyMetrics()
+        )
         self.last_generation_metrics = GenerationMetrics(
             request_latencies=tuple(
                 request_latencies[seq_id]
@@ -231,6 +271,19 @@ class LLMEngine:
             decode_time=decode_time,
             prefill_tokens=prefill_tokens,
             decode_tokens=decode_tokens,
+            scheduler_metrics=SchedulerMetrics(
+                scheduler_time=self._scheduler_time,
+                schedule_calls=self._schedule_calls,
+                prefill_steps=self._prefill_steps,
+                decode_steps=self._decode_steps,
+                prefill_scheduled_tokens=self._prefill_scheduled_tokens,
+                prefill_capacity_tokens=self._prefill_capacity_tokens,
+                prefill_scheduled_sequences=self._prefill_scheduled_sequences,
+                candidate_inspections=policy_metrics.candidate_inspections,
+                backfill_selections=policy_metrics.backfill_selections,
+                preemptions=policy_metrics.preemptions,
+                preempted_blocks=policy_metrics.preempted_blocks,
+            ),
         )
         
         # sort the outputs by sequence ID to maintain the order of prompts

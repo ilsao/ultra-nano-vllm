@@ -20,6 +20,7 @@ class ConfigTests(unittest.TestCase):
                 num_requests=(256,),
                 input_len=(1024,),
                 alternate_input_len=(None,),
+                input_order=("alternating",),
                 output_len=(1024,),
                 max_model_len=(8192,),
                 seed=(0,),
@@ -119,6 +120,33 @@ class ConfigTests(unittest.TestCase):
 
 
 class ConfigGroupTests(unittest.TestCase):
+    def test_scheduler_pareto_configs_are_counterbalanced_and_valid(self):
+        config_dir = Path(__file__).resolve().parent / "configs"
+        expected_workloads = {"prefill": 6, "kv": 3, "decode": 3}
+        for suite, workload_count in expected_workloads.items():
+            with self.subTest(suite=suite):
+                ab = resolve_config_groups(
+                    [config_dir / f"scheduler-pareto-{suite}-ab.yaml"]
+                )[0]
+                ba = resolve_config_groups(
+                    [config_dir / f"scheduler-pareto-{suite}-ba.yaml"]
+                )[0]
+
+                self.assertEqual(len(ab.runs), workload_count * 2)
+                self.assertEqual(len(ba.runs), workload_count * 2)
+                self.assertEqual(ab.dimensions, ("workload", "component"))
+                self.assertEqual(ba.dimensions, ("workload", "component"))
+                self.assertEqual(
+                    [run.config.engine_component.scheduler for run in ab.runs[:2]],
+                    ["scheduler", "scheduler-optimized"],
+                )
+                self.assertEqual(
+                    [run.config.engine_component.scheduler for run in ba.runs[:2]],
+                    ["scheduler-optimized", "scheduler"],
+                )
+                self.assertTrue(all(run.config.seed == 0 for run in ab.runs))
+                self.assertTrue(all(run.config.seed == 10 for run in ba.runs))
+
     def test_scheduler_optimized_configs_form_expected_safe_grids(self):
         config_dir = Path(__file__).resolve().parent / "configs"
         groups = resolve_config_groups(
@@ -310,6 +338,14 @@ class ConfigGroupTests(unittest.TestCase):
             ):
                 resolve_config_groups([path])
 
+    def test_rejects_nondefault_input_order_without_alternate_length(self):
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "invalid-order.yaml"
+            path.write_text("input_order: primary-first\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "alternate_input_len is not set"):
+                resolve_config_groups([path])
+
     def test_infers_dimensions_in_domain_order_and_validates_grid(self):
         configs = [
             BenchmarkConfig(
@@ -340,6 +376,7 @@ class ConfigGroupTests(unittest.TestCase):
                 "sampler",
                 "store_kvcache",
                 "alternate_input_len",
+                "input_order",
             ),
         )
         self.assertEqual(

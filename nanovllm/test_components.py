@@ -269,6 +269,29 @@ class ComponentInjectionTests(unittest.TestCase):
         block_manager.reset_peak_usage.assert_called_once_with()
         self.assertEqual(scheduler.get_peak_kvcache_blocks(), 11)
 
+    def test_baseline_scheduler_records_and_resets_policy_metrics(self):
+        scheduler = Scheduler(
+            SimpleNamespace(
+                max_num_seqs=2,
+                max_num_batched_tokens=8,
+                eos=0,
+                kvcache_block_size=2,
+            ),
+            BlockManager(num_blocks=8, block_size=2),
+        )
+        with patch.object(Sequence, "block_size", 2):
+            scheduler.add(Sequence([1, 2]))
+            scheduler.schedule()
+
+        self.assertEqual(
+            scheduler.get_scheduler_metrics().candidate_inspections, 1
+        )
+        self.assertEqual(scheduler.get_scheduler_metrics().backfill_selections, 0)
+        scheduler.reset_scheduler_metrics()
+        self.assertEqual(
+            scheduler.get_scheduler_metrics().candidate_inspections, 0
+        )
+
     def test_llm_engine_builds_scheduler_through_engine_component(self):
         components = Mock(spec=EngineComponent)
         components.create_scheduler.return_value = "scheduler"

@@ -44,6 +44,7 @@ class Config:
     sampler: tuple[str, ...] = ("sampler",)
     store_kvcache: tuple[str, ...] = ("store_kvcache",)
     alternate_input_len: tuple[int | None, ...] = (None,)
+    input_order: tuple[str, ...] = ("alternating",)
     workload_name: tuple[str, ...] = (DEFAULT_WORKLOAD_NAME,)
     component_name: tuple[str, ...] = (DEFAULT_COMPONENT_NAME,)
 
@@ -142,6 +143,7 @@ _FIELD_TYPES: dict[str, type | tuple[type, ...]] = {
     "store_kvcache": str,
     "experiment_name": str,
     "alternate_input_len": (int, type(None)),
+    "input_order": str,
     "workload_name": str,
     "component_name": str,
 }
@@ -419,6 +421,11 @@ def validate_field_value(field_name: str, value: Any) -> None:
     elif field_name == "alternate_input_len":
         if value is not None and value <= 0:
             raise ValueError("alternate_input_len must be greater than zero")
+    elif field_name == "input_order":
+        if value not in {"alternating", "primary-first", "alternate-first"}:
+            raise ValueError(
+                "input_order must be alternating, primary-first, or alternate-first"
+            )
     elif (
         field_name == "temperature"
         and value != 0
