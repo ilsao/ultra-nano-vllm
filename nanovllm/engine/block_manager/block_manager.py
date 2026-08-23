@@ -49,6 +49,16 @@ class BlockManager:
 
     @classmethod
     def compute_hash(cls, token_ids: list[int], prefix: int = -1):
+        """
+        Compute a hash for a token block, optionally chained to a prefix hash.
+
+        Args:
+            token_ids: Token IDs in the block.
+            prefix: Hash of the preceding block, or -1 for the first block.
+
+        Returns:
+            The block hash as an integer.
+        """
         h = xxhash.xxh64()
         if prefix != -1:
             h.update(prefix.to_bytes(8, "little"))
@@ -56,9 +66,11 @@ class BlockManager:
         return h.intdigest()
 
     def _allocate_block(self) -> int:
+        """Allocate a physical block from the free list and return its ID."""
         block_id = self.free_block_ids.popleft()
         block = self.blocks[block_id]
         assert block.ref_count == 0
+        # Invalidate the old hash mapping before reusing this physical block.
         if block.hash != -1 and self.hash_to_block_id.get(block.hash) == block_id:
             del self.hash_to_block_id[block.hash]
         block.reset()
@@ -67,14 +79,24 @@ class BlockManager:
         return block_id
 
     def _deallocate_block(self, block_id: int):
+        """Return an unreferenced physical block to the free list."""
         assert self.blocks[block_id].ref_count == 0
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
 
     def can_allocate(self, seq: Sequence) -> int:
+        """
+        Determine how many prefix blocks can be reused for a sequence.
+
+        Returns:
+            The number of reusable cached blocks, or -1 when there are not
+            enough free blocks to allocate the uncached remainder.
+        """
         h = -1
         num_cached_blocks = 0
         num_new_blocks = seq.num_blocks
+
+        # The last block may be incomplete, so it is not reused as a cached block.
         for i in range(seq.num_blocks - 1):
             token_ids = seq.block(i)
             h = self.compute_hash(token_ids, h)
@@ -90,8 +112,17 @@ class BlockManager:
 
     @nvtx_annotate("BlockManager.allocate")
     def allocate(self, seq: Sequence, num_cached_blocks: int):
+        """
+        Allocate blocks for a sequence, reusing cached prefix blocks when possible.
+
+        Args:
+            seq: The sequence receiving a physical block table.
+            num_cached_blocks: Number of cached prefix blocks to reuse.
+        """
         assert not seq.block_table
         h = -1
+
+        # Attach cached prefix blocks, sharing blocks that are already in use.
         for i in range(num_cached_blocks):
             token_ids = seq.block(i)
             h = self.compute_hash(token_ids, h)
@@ -104,6 +135,8 @@ class BlockManager:
                 self.free_block_ids.remove(block_id)
                 self.used_block_ids.add(block_id)
             seq.block_table.append(block_id)
+
+        # Allocate fresh blocks for the uncached remainder of the sequence.
         for _ in range(num_cached_blocks, seq.num_blocks):
             seq.block_table.append(self._allocate_block())
         self._record_peak_usage()
@@ -111,6 +144,7 @@ class BlockManager:
 
     @nvtx_annotate("BlockManager.deallocate")
     def deallocate(self, seq: Sequence):
+        """Release every physical block associated with a sequence."""
         for block_id in reversed(seq.block_table):
             block = self.blocks[block_id]
             block.ref_count -= 1
@@ -120,13 +154,16 @@ class BlockManager:
         seq.block_table.clear()
 
     def can_append(self, seq: Sequence) -> bool:
+        """Return whether decode can append a token without exhausting blocks."""
         return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
 
     def may_append(self, seq: Sequence):
+        """Allocate a new block when the appended token starts one."""
         if len(seq) % self.block_size == 1:
             seq.block_table.append(self._allocate_block())
 
     def hash_blocks(self, seq: Sequence):
+        """Hash newly completed blocks and add them to the prefix cache."""
         start = seq.num_cached_tokens // self.block_size
         end = (seq.num_cached_tokens + seq.num_scheduled_tokens) // self.block_size
         if start == end:

@@ -1,0 +1,392 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{url}
+
+\begin{document}
+
+\title{Ultra-Nano-vLLM: A Reproducible Performance-Research Workflow for Lightweight LLM Inference}
+
+\author{\IEEEauthorblockN{CHEN EN LO}
+\IEEEauthorblockA{\textit{Computer Science Department} \\
+\textit{National Yang Ming Chiao Tung University}\\
+asciibase64.cs14@nycu.edu.tw}}
+
+\maketitle
+
+\begin{abstract}
+Optimizing a large language model inference engine requires measurements that
+separate a code change from workload variation, persistent accelerator state,
+and reporting differences. Ultra-Nano-vLLM is a performance-research project
+built around nano-vLLM. It provides a scalar benchmark lifecycle, validated
+YAML experiment grids, fresh-process isolation, typed JSON reports, comparison
+plots, optional profiling annotations, and file-selected implementations for
+five replaceable engine roles. These facilities connect benchmarking,
+controlled experimentation, profiling, focused optimization, and regression
+comparison in one workflow while keeping the benchmark and experiment
+entrypoints independent of concrete engine implementations. This paper
+describes the workflow, its implementation boundaries, and the evaluation
+protocol supplied by the repository.
+\end{abstract}
+
+\section{Introduction}
+
+Large language model (LLM) inference systems coordinate model execution,
+request scheduling, and key--value (KV) cache management under changing input
+and output lengths. vLLM addresses KV-cache memory management through
+PagedAttention and a block-based serving design~\cite{kwon2023vllm}.
+nano-vLLM provides a lightweight implementation of this class of inference
+engine~\cite{nanovllm}. Its compact implementation makes individual engine
+components accessible, but an optimization study also needs a controlled way
+to define workloads, preserve comparison conditions, collect measurements, and
+separate successive runs.
+
+Performance results are difficult to interpret when a benchmark changes more
+than one relevant condition or when runtime state survives across
+configurations. Reproducible inference benchmarking therefore requires an
+explicit workload, consistent metrics, and comparable execution rules; the
+broader need for comparability across inference systems also motivates
+MLPerf Inference~\cite{reddi2019mlperf}. Within a CUDA-based LLM engine,
+additional state can arise from model initialization, memory allocation,
+compilation, CUDA Graph capture, and distributed process groups. A research
+workflow must keep these effects outside the comparison or recreate them for
+each scalar configuration.
+
+Ultra-Nano-vLLM turns nano-vLLM into a controlled environment for performance
+research. Its goal is not to extend the inference engine for its own sake, but
+to support a repeatable loop: establish a baseline, isolate a factor through a
+controlled experiment, profile the confirmed workload, apply a focused change,
+and compare the resulting reports for improvement and regression. For example,
+the repository can cross a set of named workloads with baseline and alternative
+scheduler implementations while holding the remaining component selectors
+fixed.
+
+Three engineering requirements shape the workflow. First, every comparison
+must resolve to explicit scalar configurations and reject incomplete or
+ambiguous grids before GPU execution. Second, sequential configurations must
+not share CUDA Graph pools, cached allocations, or communication state. Third,
+the experiment entrypoint must be able to replace one scheduler, block manager,
+attention implementation, sampler, or KV-cache storage kernel without learning
+the semantics of that implementation.
+
+The system addresses these requirements with separate benchmark, experiment,
+reporting, and component-selection boundaries. A scalar benchmark owns the
+measurement lifecycle. The experiment layer normalizes YAML input, validates
+the requested grid, and runs each resolved configuration in a fresh spawned
+process. Typed results return to the parent process for reporting and plotting.
+An engine-component selector maps trusted local file stems to runtime-checked
+factory contracts, allowing the same experiment machinery to transport
+alternative implementations without branching on their roles.
+
+This paper makes three contributions. First, it describes a reproducible
+benchmark-to-optimization workflow for a lightweight LLM inference engine
+(Sections~II and III). Second, it presents a validated experiment architecture
+that combines scalar configuration, process isolation, typed reporting, and
+dimension-specific comparison plots (Section~III). Third, it defines a
+pluggable boundary for controlled component and kernel replacement together
+with an evaluation protocol for scheduler comparisons (Sections~III and IV).
+
+\section{Background}
+
+\subsection{Inference Engine Foundation}
+
+Ultra-Nano-vLLM is built on nano-vLLM, which describes itself as a lightweight
+vLLM implementation and provides an offline generation interface
+~\cite{nanovllm}. The upstream engine supplies the inference implementation;
+Ultra-Nano-vLLM adds benchmark configuration, controlled experiment execution,
+report persistence, plotting, profiling hooks, and pluggable implementation
+selection. The resulting separation keeps performance-research concerns out of
+the benchmarked component implementations.
+
+The underlying memory organization uses fixed-size KV-cache blocks. In the
+broader vLLM design, PagedAttention stores logical KV blocks in non-contiguous
+physical memory and allocates additional blocks as a sequence grows
+~\cite{kwon2023vllm}. Ultra-Nano-vLLM exposes peak used blocks and peak block
+utilization as measurements so that latency and throughput changes can be
+examined alongside cache pressure.
+
+\subsection{Prefill and Decode}
+
+Autoregressive LLM inference contains a prefill phase that processes prompt
+tokens and a decode phase that repeatedly generates subsequent tokens.
+Sarathi studies the different execution characteristics of these phases and
+uses chunked prefills with decode-maximal batching~\cite{agrawal2023sarathi}.
+Ultra-Nano-vLLM records prefill and decode time and throughput separately in
+addition to end-to-end measurements. This separation supports phase-specific
+profiling without treating a phase-local metric as a substitute for the total
+batch result.
+
+The default repository experiments use CUDA Graph execution, while an eager
+mode is available as an explicit configuration. PyTorch documents CUDA Graph
+replay as a way to reduce CPU launch overhead by replaying fixed kernels and
+arguments~\cite{pytorchcudagraphs}. Because graph capture and its memory pools
+are persistent runtime state, experiment configurations are isolated in fresh
+processes.
+
+\section{Method}
+
+\subsection{Research Workflow}
+
+Ultra-Nano-vLLM organizes performance work into five steps. A researcher first
+establishes a reproducible scalar benchmark for the workload of interest. A
+one- or two-dimensional experiment then isolates a workload or component
+effect. The confirmed workload is profiled while its model, request count,
+sequence lengths, sampling settings, execution mode, and component selectors
+remain fixed. A focused component, kernel, or engine change is introduced only
+after a bottleneck hypothesis has been formed. Finally, the original benchmark
+grid is rerun and its reports are compared with the baseline.
+
+\subsection{Scalar Benchmark Lifecycle}
+
+The scalar benchmark configuration records the model path, request count,
+primary and optional alternate input lengths, output length, maximum model
+length, random seed, sampling temperature, repeat count, execution mode, and
+engine-component selectors. An optional input-order field controls whether the
+two input-length cohorts are alternating, primary-first, or alternate-first.
+Both input lengths are checked against the requested and effective model
+context limits before warmup.
+
+Each benchmark creates the engine, constructs a deterministic synthetic
+workload, performs warmup, and measures the requested repeats. CUDA is
+synchronized around each end-to-end timing interval. The result contains
+request and token totals; elapsed time; request-latency percentiles; request,
+output-token, total-token, prefill, and decode throughput; prefill and decode
+time; and peak KV-cache block use. Repeated scalar measurements are summarized
+by their median, minimum, maximum, mean, and standard deviation and persisted
+as typed JSON.
+
+\subsection{Controlled Experiment Expansion}
+
+An experiment YAML file defines workload columns and component columns.
+Scalars and one-element lists broadcast within their respective set, while
+other lists must have consistent lengths. The configuration layer normalizes
+the input and validates labels, selector values, scalar configurations, and
+the complete workload-by-component cross-product before model loading. The
+sweep layer then zips positional columns within each axis and crosses the two
+axes in deterministic workload-first order.
+
+Each YAML file remains an independent reporting and plotting group. A group
+may contain zero, one, or two conceptual dimensions. Zero-dimensional groups
+produce the result and JSON report; one-dimensional groups produce line plots;
+and two-dimensional groups produce multi-series line plots. Plot-only mode
+loads only explicitly supplied reports and validates their compatibility
+before rendering comparisons.
+
+\subsection{Process Isolation and Reporting}
+
+Every scalar experiment configuration runs sequentially in a fresh process
+created with the spawn multiprocessing context. The worker performs benchmark
+cleanup before returning the typed result and runtime configuration to the
+parent. This boundary prevents CUDA Graph pools, cached allocations, and
+distributed state from leaking into a later configuration while keeping file
+output and plotting in the parent process.
+
+The reporting layer produces thirteen comparisons: elapsed time; latency P50,
+P90, and P99; request, output-token, total-token, prefill, and decode
+throughput; prefill and decode time; peak KV-cache blocks; and peak KV-cache
+utilization. For summarized metrics, plots use the mean with a
+standard-deviation band. JSON reports retain the resolved experiment
+configuration and runtime configuration required for later plot-only analysis.
+
+\subsection{Pluggable Components and Kernels}
+
+The \texttt{EngineComponent} value contains selectors for Scheduler,
+BlockManager, Attention, Sampler, and the store-KV-cache kernel. Each selector
+is a trusted local filename stem resolved only within the corresponding role
+directory; path separators and parent-directory traversal are rejected.
+Component files export \texttt{create\_component(...)} and kernel files export
+\texttt{create\_kernel()}. Their return values must satisfy the
+runtime-checkable protocol for the selected role.
+
+This design makes implementation choice an experimental dimension. Benchmark
+and experiment entrypoints transport selector values but do not import
+concrete implementations or branch on component behavior. A comparison can
+therefore replace one role while holding the workload and all other roles
+fixed.
+
+\subsection{Profiling Boundary}
+
+Profiling begins only after an uninstrumented benchmark or controlled
+experiment has identified a stable workload. The repository does not prescribe
+a profiler. It provides optional NVTX ranges for scheduler operations, block
+allocation and deallocation, model-input preparation, attention, KV-cache
+storage, sampling, and logits computation. Profiling overhead is kept separate
+from the JSON reports used for the performance comparison.
+
+\section{Experiments}
+
+\subsection{Experimental Setup}
+
+We evaluate the baseline \texttt{scheduler} and two candidate implementations,
+\texttt{scheduler-v1} and \texttt{scheduler-v2}. The evaluation uses a
+Qwen3-0.6B model in bfloat16 on one NVIDIA GeForce RTX 3080 Laptop GPU, Python
+3.12.3, PyTorch 2.8.0 with CUDA 12.8, and Triton 3.4.0. Tensor parallelism is
+one. CUDA Graph execution is enabled, the model context limit is 8192 tokens,
+and the KV cache contains 424 blocks of 256 tokens at a configured GPU-memory
+utilization of 0.9.
+
+Each workload contains 33 requests and generates one token per request with
+temperature zero. The \texttt{hol} prefix identifies workloads designed to
+expose head-of-line effects. \texttt{hol-short-only} is the homogeneous
+control: all 33 prompts contain 256 tokens, so the queue contains no long
+prompt. Each \texttt{hol-long-first-L} workload places 16 prompts of length
+$L$ before 17 prompts of length 256. The six suffixes identify the exact long
+prompt length: \texttt{hol-long-first-1024},
+\texttt{hol-long-first-2048}, \texttt{hol-long-first-3072},
+\texttt{hol-long-first-4096}, \texttt{hol-long-first-5120}, and
+\texttt{hol-long-first-6144} use $L$ values of 1024, 2048, 3072, 4096, 5120,
+and 6144 tokens, respectively. These workloads measure how long prompts at the
+head of the queue delay the following short prompts.
+
+The remaining two workloads hold the prompt lengths at 256 and 4096 tokens
+while changing only their order. \texttt{hol-alternating-4096} alternates
+between the two lengths, beginning with a 256-token prompt, for 17 short and
+16 long prompts. \texttt{hol-short-first-4096} places all 17 short prompts
+before the 16 long prompts, providing an ordering control in which the short
+requests do not wait behind long prefills. Every scheduler--workload
+coordinate has ten measured runs with seeds 1--10, for 270 measured batches
+in total. The block manager, attention, sampler, and KV-cache storage kernel
+remain fixed across scheduler variants.
+
+\subsection{Scheduler Variants and Analysis}
+
+The baseline scheduler processes the waiting queue in first-come,
+first-served order and stops the prefill scan when the next sequence cannot
+join the current batch. \texttt{scheduler-v1} performs a single pass over the
+waiting queue, defers candidates that do not fit, and may backfill the batch
+with a later request. \texttt{scheduler-v2} applies the same single-pass rule
+after a stable sort by remaining prefill tokens, thereby implementing
+shortest-remaining-job-first prefill scheduling. These policies leave the
+decode batching logic unchanged, but both candidates select the running
+sequence with the fewest allocated blocks as a preemption victim instead of
+selecting the last running sequence. No preemption occurs in the measured
+runs.
+
+The analysis pairs each candidate run with the baseline run at the same
+workload and seed. We report geometric-mean relative changes in
+short-request median latency and total-token throughput. Confidence intervals
+are the 2.5th and 97.5th percentiles of 10,000 paired bootstrap resamples.
+
+\subsection{Performance Results}
+
+Figure~\ref{fig:scheduler-improvement} shows that shortest-remaining-job-first
+prefill scheduling substantially reduces head-of-line latency while keeping
+aggregate throughput close to the baseline. Across the six long-first
+workloads, \texttt{scheduler-v2} reduces short-request P50 by 25.15--91.66\%.
+Its total-throughput change ranges from a 5.22\% reduction at 2048 tokens to a
+1.16\% increase at 6144 tokens. The latency gain grows as the long prompt
+becomes more expensive, reaching 83.51\%, 84.73\%, and 91.66\% for long prompts
+of 4096, 5120, and 6144 tokens, respectively.
+
+The alternating 4096-token workload provides the clearest result for both
+candidates. \texttt{scheduler-v1} reduces short-request P50 by 61.58\% while
+increasing throughput by 0.80\%; \texttt{scheduler-v2} reduces it by 71.56\%
+with a 0.87\% throughput increase. In contrast, neither candidate materially
+changes short-request latency in the homogeneous short-only workload or when
+short prompts are placed first. This contrast localizes the benefit to
+workloads in which short requests would otherwise wait behind long prefills.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{experiments/report/scheduler-improvement.pdf}
+\caption{The candidate schedulers reduce short-request head-of-line latency
+with limited change in aggregate throughput. Panel (a) reports the reduction
+in short-request P50 latency; panel (b) reports the change in total-token
+throughput. Values are geometric-mean changes relative to the baseline, and
+error bars are 95\% confidence intervals from 10,000 paired bootstrap
+resamples over ten seeds. Positive values favor the candidate in both panels.
+LF, Alt, and SF denote long-first, alternating, and short-first workloads; the
+suffix gives the long-prompt length.}
+\label{fig:scheduler-improvement}
+\end{figure*}
+
+\subsection{Mechanism Evidence and Limitations}
+
+The telemetry is consistent with the intended scheduling changes, but it does
+not establish causality. On the alternating 4096-token workload,
+\texttt{scheduler-v1} records 120 backfill selections across ten runs
+and raises mean prefill utilization from 0.711 to 0.853; the baseline records
+no backfills. This change coincides with simultaneous latency and throughput
+improvement on that workload. In contrast, \texttt{scheduler-v2} records no
+backfills in any workload. It inspects more candidates than the baseline on
+most heterogeneous workloads and its mean scheduler time is higher in those
+cases, consistent with the added sorting and scan work.
+
+The current experiment is bounded to one model, one GPU, 33-request offline
+batches, one-token outputs, and nine prompt-order conditions. It therefore
+tests prefill head-of-line behavior, not sustained decode scheduling or online
+arrival processes. Experiments with longer outputs and KV-pressure workloads
+are needed to determine whether the observed short-request latency reductions
+persist outside this prefill-focused setting.
+
+\section{Related Work}
+
+LLM serving systems have studied scheduling, memory management, and the
+interaction between prefill and decode. Orca introduced iteration-level
+scheduling and selective batching for transformer-based generative
+models~\cite{yu2022orca}. vLLM introduced PagedAttention and a block-based
+KV-cache manager~\cite{kwon2023vllm}. Sarathi combined chunked prefills with
+decode-maximal batching~\cite{agrawal2023sarathi}, while DistServe separated
+prefill and decode execution to address interference between the two
+phases~\cite{zhong2024distserve}. These systems propose serving mechanisms;
+Ultra-Nano-vLLM instead supplies a small environment for isolating,
+instrumenting, and comparing focused changes to the nano-vLLM codebase.
+
+Reproducible benchmarking is a separate concern from proposing a serving
+mechanism. MLPerf Inference defines a benchmarking methodology intended to
+support comparison across inference systems~\cite{reddi2019mlperf}.
+Ultra-Nano-vLLM has a narrower scope: it holds a local model and workload
+configuration fixed while comparing components inside one lightweight engine.
+Its reports and plots are research artifacts for controlled optimization, not
+claims of conformance with MLPerf.
+
+\section{Conclusion}
+
+Ultra-Nano-vLLM extends nano-vLLM with a performance-research workflow that
+connects scalar benchmarking, validated controlled experiments, process
+isolation, typed reporting, plotting, profiling, and pluggable component
+selection. The separation between engine-agnostic entrypoints and
+file-selected implementations allows a focused component or kernel change to
+be evaluated against the same workload and reporting path. The repository also
+defines baseline and scheduler-comparison protocols that preserve per-repeat
+measurements and correctness checks for later analysis.
+
+\begin{thebibliography}{00}
+
+\bibitem{kwon2023vllm}
+W. Kwon et al., ``Efficient memory management for large language model serving
+with PagedAttention,'' arXiv:2309.06180, 2023.
+
+\bibitem{nanovllm}
+GeeeekExplorer, ``nano-vLLM,'' GitHub repository. [Online]. Available:
+\url{https://github.com/GeeeekExplorer/nano-vllm}. Accessed: Aug. 22, 2026.
+
+\bibitem{reddi2019mlperf}
+V. J. Reddi et al., ``MLPerf inference benchmark,'' arXiv:1911.02549, 2019.
+
+\bibitem{agrawal2023sarathi}
+A. Agrawal et al., ``SARATHI: Efficient LLM inference by piggybacking decodes
+with chunked prefills,'' arXiv:2308.16369, 2023.
+
+\bibitem{pytorchcudagraphs}
+PyTorch Contributors, ``CUDA semantics: CUDA Graphs,'' PyTorch documentation.
+[Online]. Available: \url{https://pytorch.org/docs/stable/notes/cuda.html}.
+Accessed: Aug. 22, 2026.
+
+\bibitem{yu2022orca}
+G.-I. Yu, J. S. Jeong, G.-W. Kim, S. Kim, and B.-G. Chun, ``Orca: A
+distributed serving system for transformer-based generative models,'' in
+\emph{Proc. 16th USENIX Symp. Operating Systems Design and Implementation
+(OSDI)}, 2022, pp. 521--538.
+
+\bibitem{zhong2024distserve}
+Y. Zhong et al., ``DistServe: Disaggregating prefill and decoding for
+goodput-optimized large language model serving,'' arXiv:2401.09670, 2024.
+
+\end{thebibliography}
+
+\end{document}

@@ -3,8 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 import json
+import platform
 from pathlib import Path
+import subprocess
 from typing import TYPE_CHECKING, Any
 
 from rich import box
@@ -200,6 +203,8 @@ class Reporter:
         *,
         output_path: Path | None = None,
         experiment_config: BenchmarkConfig | None = None,
+        workload_name: str | None = None,
+        component_name: str | None = None,
     ) -> Path:
         """Save a benchmark result as a structured JSON report."""
         report_path = output_path or REPORT_DIR / (
@@ -207,8 +212,13 @@ class Reporter:
         )
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report: dict[str, Any] = {"experiment_name": experiment_name}
+        report["provenance"] = collect_provenance()
         if experiment_config is not None:
             report["experiment_config"] = asdict(experiment_config)
+        if workload_name is not None:
+            report["workload_name"] = workload_name
+        if component_name is not None:
+            report["component_name"] = component_name
         report["configuration"] = asdict(configuration)
         report["result"] = asdict(bench_result)
         report_path.write_text(
@@ -230,6 +240,57 @@ class Reporter:
 
 def _report_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d-%H%M%S")
+
+
+def collect_provenance() -> dict[str, str | bool | None]:
+    """Collect reproducibility metadata without making report saving fragile."""
+    repository = Path(__file__).resolve().parent.parent
+    commit = None
+    dirty = None
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=2,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repository,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=2,
+        ).stdout != ""
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    try:
+        import torch
+
+        torch_version = str(torch.__version__)
+        cuda_version = torch.version.cuda
+        gpu = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    except (ImportError, RuntimeError):
+        torch_version = None
+        cuda_version = None
+        gpu = None
+    try:
+        triton_version = version("triton")
+    except PackageNotFoundError:
+        triton_version = None
+
+    return {
+        "git_commit": commit,
+        "git_dirty": dirty,
+        "python": platform.python_version(),
+        "torch": torch_version,
+        "cuda": cuda_version,
+        "triton": triton_version,
+        "gpu": gpu,
+    }
 
 
 def _format_tokens(value: float) -> str:

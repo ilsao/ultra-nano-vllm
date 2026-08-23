@@ -1,6 +1,7 @@
 # Benchmark report
 benchmarks/report/
 experiments/report/
+ultra-nano-vllm.text
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

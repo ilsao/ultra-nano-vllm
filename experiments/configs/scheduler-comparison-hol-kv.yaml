@@ -1,0 +1,27 @@
+model: ~/huggingface/Qwen3-0.6B/
+
+workload_name:
+  - kv-fit-45
+  - kv-decode-boundary-47
+  - kv-decode-pressure-49
+  - kv-allocation-boundary-51
+  - kv-admission-pressure-53
+  - kv-high-pressure-55
+  - kv-higher-pressure-57
+num_requests: [45, 47, 49, 51, 53, 55, 57]
+input_len: 256
+alternate_input_len: 4096
+input_order: alternate-first
+output_len: 128
+max_model_len: 8192
+seed: 0
+temperature: 0.0
+repeats: 10
+enforce_eager: false
+
+component_name: [baseline, scheduler-v1, scheduler-v2]
+scheduler: [scheduler, scheduler-v1, scheduler-v2]
+block_manager: block_manager
+attention: attention
+sampler: sampler
+store_kvcache: store_kvcache

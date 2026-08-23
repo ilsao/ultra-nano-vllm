@@ -1,9 +1,12 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from hashlib import sha256
+import json
 from time import perf_counter
 
 import torch
 from nanovllm import EngineComponent, LLM
+from nanovllm.engine.scheduler_metrics import SchedulerMetrics
 
 from .workloads import BenchmarkRequest
 
@@ -35,6 +38,10 @@ class BatchRunResult:
     decode_time: float
     prefill_tokens: int
     decode_tokens: int
+    request_input_lengths: tuple[int, ...] = ()
+    seed: int | None = None
+    output_digest: str = ""
+    scheduler_metrics: SchedulerMetrics = field(default_factory=SchedulerMetrics)
 
 
 class BenchmarkRunner:
@@ -83,7 +90,12 @@ class BenchmarkRunner:
         sampling_params = [req.sampling_params for req in warmup_requests]
         self.llm.generate(prompt_token_ids, sampling_params, use_tqdm=False)
 
-    def run_benchmark(self, benchmark_requests: list[BenchmarkRequest]) -> BatchRunResult:
+    def run_benchmark(
+        self,
+        benchmark_requests: list[BenchmarkRequest],
+        *,
+        seed: int | None = None,
+    ) -> BatchRunResult:
         """Run one offline batch and measure its end-to-end wall-clock time."""
         if not benchmark_requests:
             raise ValueError("benchmark_requests must not be empty")
@@ -111,6 +123,18 @@ class BenchmarkRunner:
 
         input_tokens = sum(len(token_ids) for token_ids in prompt_token_ids)
         output_tokens = sum(len(output["token_ids"]) for output in outputs)
+        scheduler_metrics = replace(
+            getattr(generation_metrics, "scheduler_metrics", SchedulerMetrics()),
+            extra_prefill_tokens=max(
+                0, generation_metrics.prefill_tokens - input_tokens
+            ),
+        )
+        output_digest = sha256(
+            json.dumps(
+                [output["token_ids"] for output in outputs],
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         return BatchRunResult(
             elapsed_time=elapsed_time,
             num_requests=len(benchmark_requests),
@@ -124,4 +148,8 @@ class BenchmarkRunner:
             decode_time=generation_metrics.decode_time,
             prefill_tokens=generation_metrics.prefill_tokens,
             decode_tokens=generation_metrics.decode_tokens,
+            request_input_lengths=tuple(len(token_ids) for token_ids in prompt_token_ids),
+            seed=seed,
+            output_digest=output_digest,
+            scheduler_metrics=scheduler_metrics,
         )

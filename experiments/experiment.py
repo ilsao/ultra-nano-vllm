@@ -16,12 +16,13 @@ from benchmarks.benchmark import (
     BenchmarkConfig,
     add_benchmark_arguments,
 )
-from experiments.config import ExperimentGroup, resolve_config_groups
+from experiments.config import ExperimentGroup, ExperimentRun, resolve_config_groups
 from experiments.plot import (
     PlotRecord,
     load_reports,
     plot_1d,
     plot_2d,
+    select_2d_dimensions,
     validate_grid,
 )
 from experiments import runner as experiment_runner
@@ -99,10 +100,14 @@ def plot_records(
             output_dir=output_dir,
             plot_name=plot_name,
         )
+    x_dimension, series_dimension = select_2d_dimensions(
+        records,
+        actual_dimensions,
+    )
     return plot_2d(
         records,
-        actual_dimensions[0],
-        actual_dimensions[1],
+        x_dimension,
+        series_dimension,
         output_dir=output_dir,
         plot_name=plot_name,
     )
@@ -125,7 +130,8 @@ def run_groups(
     plot_paths = []
     for group in groups:
         records = []
-        for config in group.configs:
+        for run in group.runs:
+            config = run.config
             result, configuration = (
                 experiment_runner.execute_benchmark_isolated(config)
             )
@@ -136,8 +142,17 @@ def run_groups(
                 config.experiment_name,
                 output_path=report_path(config.experiment_name),
                 experiment_config=config,
+                workload_name=run.workload_name,
+                component_name=run.component_name,
             )
-            records.append(PlotRecord(config=config, result=result))
+            records.append(
+                PlotRecord(
+                    config=config,
+                    result=result,
+                    workload_name=run.workload_name,
+                    component_name=run.component_name,
+                )
+            )
         group_paths = plot_records(
             records,
             group.dimensions,

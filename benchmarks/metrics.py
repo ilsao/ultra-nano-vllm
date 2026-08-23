@@ -34,6 +34,7 @@ class BenchmarkResult:
     decode_time: MetricSummary
     peak_kvcache_blocks: int
     peak_kvcache_utilization: float
+    run_samples: tuple[BatchRunResult, ...] = ()
 
 
 def _summarize(values: list[float]) -> MetricSummary:
@@ -144,4 +145,5 @@ def compute_benchmark_result(run_results: list[BatchRunResult]) -> BenchmarkResu
         peak_kvcache_utilization=(
             peak_kvcache_blocks / first.kvcache_capacity_blocks
         ),
+        run_samples=tuple(run_results),
     )
