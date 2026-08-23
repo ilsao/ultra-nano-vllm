@@ -1,0 +1,38 @@
+model: ~/huggingface/Qwen3-0.6B/
+
+workload_name:
+  - hol-short-only
+  - hol-long-first-1024
+  - hol-long-first-2048
+  - hol-long-first-3072
+  - hol-long-first-4096
+  - hol-long-first-5120
+  - hol-long-first-6144
+  - hol-alternating-4096
+  - hol-short-first-4096
+num_requests: 33
+input_len: 256
+alternate_input_len: [null, 1024, 2048, 3072, 4096, 5120, 6144, 4096, 4096]
+input_order:
+  - alternating
+  - alternate-first
+  - alternate-first
+  - alternate-first
+  - alternate-first
+  - alternate-first
+  - alternate-first
+  - alternating
+  - primary-first
+output_len: 1
+max_model_len: 8192
+seed: 0
+temperature: 0.0
+repeats: 10
+enforce_eager: false
+
+component_name: [baseline, scheduler-v1, scheduler-v2]
+scheduler: [scheduler, scheduler-v1, scheduler-v2]
+block_manager: block_manager
+attention: attention
+sampler: sampler
+store_kvcache: store_kvcache

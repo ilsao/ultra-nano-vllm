@@ -63,7 +63,11 @@ class Scheduler:
     @nvtx_annotate("Scheduler.schedule")
     def schedule(self) -> tuple[list[Sequence], bool]:
         """
-        Schedule sequences while scanning each prefill candidate at most once.
+        Schedule prefills by shortest remaining job, then run decode as before.
+
+        The waiting queue is stably sorted by remaining prefill tokens. Sorting
+        costs O(n log n), preserves the queue order for equal-length jobs, and
+        each candidate is still inspected at most once per scheduling step.
 
         Returns:
             A pair containing the scheduled sequences and a flag indicating
@@ -72,6 +76,16 @@ class Scheduler:
         scheduled_seqs = []
         num_batched_tokens = 0
         deferred: deque[Sequence] = deque()
+
+        # Python's sort is stable, so equal-length jobs retain their current
+        # waiting order, including the priority given to a preempted sequence
+        # that was returned to the front of the queue.
+        self.waiting = deque(
+            sorted(
+                self.waiting,
+                key=lambda seq: seq.num_tokens - seq.num_cached_tokens,
+            )
+        )
 
         # During one prefill batch, remaining token capacity and free KV blocks
         # can only decrease. A rejected sequence therefore cannot become

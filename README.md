@@ -225,30 +225,38 @@ independent plotting group:
 
 ```bash
 python experiments/experiment.py \
-  --config experiments/configs/baseline-input-sweeps.yaml \
-  --config experiments/configs/baseline-output-sweeps.yaml
+  --config experiments/configs/scheduler-comparison-minimal.yaml \
+  --config experiments/configs/scheduler-comparison-hol-kv.yaml
 ```
 
-### Shipped baseline suite
+### Included experiment configurations
 
-The repository baseline uses greedy decoding, CUDA graphs, `max_model_len: 8192`,
-and seven measured repeats per point. Shorter sequences keep the suite practical,
-while the final point of each sweep is expected to saturate the logical KV cache.
+The repository currently includes two three-scheduler comparisons. Both use
+Qwen3-0.6B, greedy decoding, CUDA Graph execution, a maximum model length of
+8192 tokens, and ten measured repeats with seeds 1--10.
 
-| Config | Fixed workload | Sweep values |
+| Config | Workloads | Purpose |
 | --- | --- | --- |
-| `baseline-req-sweeps.yaml` | input 256, output 256 | requests: 16, 32, 64, 128, 169, 196, 211, 212, 213, 256 |
-| `baseline-input-sweeps.yaml` | 64 requests, output 1 | input: 128, 256, 512, 1024, 2048 |
-| `baseline-output-sweeps.yaml` | 64 requests, input 1 | output: 128, 256, 512, 1024, 1280, 1536, 1537, 1792, 2048 |
+| `scheduler-comparison-minimal.yaml` | Nine 33-request batches with 256-token short prompts and optional 1024--6144-token long prompts | Isolate prefill head-of-line effects across short-only, long-first, alternating, and short-first queue orders. |
+| `scheduler-comparison-hol-kv.yaml` | Seven long-first mixed-length batches with 45--57 requests and 128-token outputs | Exercise decode and admission behavior as KV-cache pressure increases. |
 
-Reports produced by the earlier 4096-context workloads remain useful as
-historical characterization, but should not be mixed into a new baseline plot.
+`scheduler-comparison-minimal.yaml` names each workload according to its queue
+shape. `hol-short-only` contains only 256-token prompts.
+`hol-long-first-L` places the `L`-token cohort before the short cohort, where
+`L` is 1024, 2048, 3072, 4096, 5120, or 6144. `hol-alternating-4096`
+interleaves the 256- and 4096-token cohorts, while `hol-short-first-4096`
+places the short cohort first.
+
+`scheduler-comparison-hol-kv.yaml` holds the mixed 256/4096-token long-first
+prompt shape and 128-token output length fixed while increasing request count.
+Its labels describe the intended pressure points, from `kv-fit-45` through
+`kv-higher-pressure-57`; the numeric suffix is the request count.
 
 Benchmark CLI options can override scalar YAML values for the invocation:
 
 ```bash
 python experiments/experiment.py \
-  --config experiments/configs/baseline-input-sweeps.yaml \
+  --config experiments/configs/scheduler-comparison-minimal.yaml \
   --temperature 0 \
   --repeats 5
 ```
@@ -286,19 +294,14 @@ python experiments/experiment.py --plot-only \
 
 ### Scheduler comparison suite
 
-The six `scheduler-comparison-*.yaml` configs compare the baseline `scheduler`,
-`scheduler-v1`, and `scheduler-v2` in a fixed order with measured seeds 1–10.
-The request, input, and output sweeps reuse the standalone baseline workloads;
-the prefill, KV-boundary, and decode groups target scheduler mechanisms:
+Both included configurations compare the baseline `scheduler`, `scheduler-v1`,
+and `scheduler-v2` in a fixed order while holding the block manager, attention,
+sampler, and store-KV-cache kernel constant:
 
 ```bash
 python experiments/experiment.py \
-  --config experiments/configs/scheduler-comparison-req.yaml \
-  --config experiments/configs/scheduler-comparison-input.yaml \
-  --config experiments/configs/scheduler-comparison-output.yaml \
-  --config experiments/configs/scheduler-comparison-prefill.yaml \
-  --config experiments/configs/scheduler-comparison-kv.yaml \
-  --config experiments/configs/scheduler-comparison-decode.yaml
+  --config experiments/configs/scheduler-comparison-minimal.yaml \
+  --config experiments/configs/scheduler-comparison-hol-kv.yaml
 ```
 
 Each group produces thirteen charts. Every chart places workload on the x-axis
@@ -324,13 +327,14 @@ candidate pair when its token totals or output digest differ, computes
 10,000-sample bootstrap confidence intervals, and writes a combined Markdown,
 CSV, Pareto figure, and three-scheduler mechanism figure.
 
-The v2 scheduler deliberately keeps linear queue scans. Prefill eligibility
-depends on the remaining token budget, current allocation state, queue-head
-history, and prefix-cache behavior, so a static priority key cannot represent
-the next valid candidate. Maintaining a heap would add invalidation and update
-work while still requiring feasibility checks; the single-pass deferred queue
-instead guarantees at most one candidate inspection per scheduling call while
-preserving v1 decisions.
+The baseline scheduler processes waiting requests in first-come, first-served
+order and stops when the next prefill cannot join the current batch.
+`scheduler-v1` scans the waiting queue once, defers candidates that do not fit,
+and can backfill remaining capacity with a later request. `scheduler-v2`
+stably sorts waiting requests by remaining prefill tokens before applying the
+same single-pass deferred scan. This shortest-remaining-job-first policy moves
+short prefills ahead of long prefills while preserving the order of equal-size
+requests.
 
 Only the explicitly listed reports form the plotting group. They must contain
 compatible `experiment_config` and result payloads. Reports containing only the
@@ -457,15 +461,13 @@ commands, and artifact storage to the investigation.
 Prefer the repository virtual environment when it exists:
 
 ```bash
-.venv/bin/python -m unittest discover
 .venv/bin/python -m compileall -q benchmarks experiments nanovllm utils
 git diff --check
 ```
 
 Use `python3` instead of `.venv/bin/python` when the virtual environment is not
-available. Unit tests should mock model loading and expensive GPU work; do not
-run real benchmarks without a suitable NVIDIA GPU, CUDA environment, and local
-model.
+available. Do not run real benchmarks without a suitable NVIDIA GPU, CUDA
+environment, and local model.
 
 Generated output under `benchmarks/report/` and `experiments/report/` should
 remain untracked.

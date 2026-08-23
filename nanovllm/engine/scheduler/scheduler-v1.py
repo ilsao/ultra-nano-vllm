@@ -44,89 +44,77 @@ class Scheduler:
     def add(self, seq: Sequence):
         self.waiting.append(seq)
 
-    def _find_prefill_candidate(
-        self,
-        remaining: int,
-        allow_chunking: bool,
-    ) -> tuple[Sequence, int, int] | None:
-        """Return the first waiting sequence that can enter this batch."""
-        head = self.waiting[0]
-        for seq in self.waiting:
-            self._candidate_inspections += 1
-            if not seq.block_table:
-                num_cached_blocks = self.block_manager.can_allocate(seq)
-                if num_cached_blocks == -1:
-                    continue
-                num_tokens = (
-                    seq.num_tokens - num_cached_blocks * self.block_size
-                )
-            else:
-                num_cached_blocks = 0
-                num_tokens = seq.num_tokens - seq.num_cached_tokens
-
-            if allow_chunking or num_tokens <= remaining:
-                if seq is not head:
-                    self._backfill_selections += 1
-                return seq, num_cached_blocks, num_tokens
-        return None
-
-    def _select_preemption_victim(self) -> Sequence:
-        """Select the smallest running sequence, preferring the newest tie."""
-        min_blocks = min(len(seq.block_table) for seq in self.running)
-        return next(
-            seq
-            for seq in reversed(self.running)
-            if len(seq.block_table) == min_blocks
-        )
+    def _pop_preemption_victim(self) -> Sequence:
+        """Remove the smallest running sequence, preferring the newest tie."""
+        victim = None
+        victim_index = -1
+        min_blocks = None
+        running_count = len(self.running)
+        for reverse_offset, seq in enumerate(reversed(self.running)):
+            blocks = len(seq.block_table)
+            if min_blocks is None or blocks < min_blocks:
+                min_blocks = blocks
+                victim = seq
+                victim_index = running_count - reverse_offset - 1
+        assert victim is not None
+        del self.running[victim_index]
+        return victim
 
     @nvtx_annotate("Scheduler.schedule")
     def schedule(self) -> tuple[list[Sequence], bool]:
         """
-        Schedule sequences for processing.
-
-        This method manages block allocation and preemption while ensuring the
-        number of scheduled tokens does not exceed the current batch limit.
+        Schedule sequences while scanning each prefill candidate at most once.
 
         Returns:
             A pair containing the scheduled sequences and a flag indicating
             whether the current phase is prefill (True) or decode (False).
         """
         scheduled_seqs = []
-
-        # The number of tokens scheduled in the current batch.
         num_batched_tokens = 0
+        deferred: deque[Sequence] = deque()
 
-        # Prefill first.
-        # It's possible to improve the efficiency by adapting decode-maximal batching
-
-        # Prefill sequences whose KV cache is not complete yet.
+        # During one prefill batch, remaining token capacity and free KV blocks
+        # can only decrease. A rejected sequence therefore cannot become
+        # feasible later in the same scan and does not need to be revisited.
         while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
-            # The number of tokens that can still be scheduled in this batch.
             remaining = self.max_num_batched_tokens - num_batched_tokens
             if remaining == 0:
                 break
 
-            # Backfill with the first feasible waiting sequence. Only the first
-            # sequence scheduled in a batch may use chunked prefill.
-            candidate = self._find_prefill_candidate(
-                remaining,
-                allow_chunking=not scheduled_seqs,
-            )
-            if candidate is None:
-                break
-            seq, num_cached_blocks, num_tokens = candidate
+            seq = self.waiting.popleft()
+            self._candidate_inspections += 1
+            if not seq.block_table:
+                num_cached_blocks = self.block_manager.can_allocate(seq)
+                if num_cached_blocks == -1:
+                    deferred.append(seq)
+                    continue
+                num_tokens = seq.num_tokens - num_cached_blocks * self.block_size
+            else:
+                num_cached_blocks = 0
+                num_tokens = seq.num_tokens - seq.num_cached_tokens
 
+            # Only the first scheduled prefill may be chunked. Later sequences
+            # that do not fit are deferred without being inspected again.
+            if scheduled_seqs and num_tokens > remaining:
+                deferred.append(seq)
+                continue
+
+            if deferred:
+                self._backfill_selections += 1
             if not seq.block_table:
                 self.block_manager.allocate(seq, num_cached_blocks)
             seq.num_scheduled_tokens = min(num_tokens, remaining)
             num_batched_tokens += seq.num_scheduled_tokens
 
-            # Move a sequence to the running queue once prefill is complete.
             if seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens:
                 seq.status = SequenceStatus.RUNNING
-                self.waiting.remove(seq)
                 self.running.append(seq)
+            else:
+                deferred.append(seq)
             scheduled_seqs.append(seq)
+
+        deferred.extend(self.waiting)
+        self.waiting = deferred
 
         if scheduled_seqs:
             return scheduled_seqs, True
@@ -134,13 +122,9 @@ class Scheduler:
         # Decode one token for each selected running sequence.
         while self.running and len(scheduled_seqs) < self.max_num_seqs:
             seq = self.running.popleft()
-            # If a new block cannot be appended, preempt another sequence to
-            # release its blocks. The current sequence is the final fallback.
             while not self.block_manager.can_append(seq):
                 if self.running:
-                    victim = self._select_preemption_victim()
-                    self.running.remove(victim)
-                    self.preempt(victim)
+                    self.preempt(self._pop_preemption_victim())
                 else:
                     self.preempt(seq)
                     break
@@ -171,27 +155,16 @@ class Scheduler:
         token_ids: list[int],
         is_prefill: bool,
     ):
-        """
-        Update sequences with generated tokens and release completed requests.
-
-        Args:
-            seqs: The sequences processed by the latest model step.
-            token_ids: The token generated for each sequence.
-            is_prefill: Whether the latest model step was a prefill step.
-        """
+        """Update generated sequences and release completed requests."""
         for seq, token_id in zip(seqs, token_ids):
             self.block_manager.hash_blocks(seq)
             seq.num_cached_tokens += seq.num_scheduled_tokens
             seq.num_scheduled_tokens = 0
 
-            # Skip token post-processing while chunked prefill is still active.
             if is_prefill and seq.num_cached_tokens < seq.num_tokens:
                 continue
 
-            # Append the token produced after prefill or during decode.
             seq.append_token(token_id)
-
-            # Finish on EOS unless it is ignored, or at the completion limit.
             if (
                 not seq.ignore_eos and token_id == self.eos
             ) or seq.num_completion_tokens == seq.max_tokens:

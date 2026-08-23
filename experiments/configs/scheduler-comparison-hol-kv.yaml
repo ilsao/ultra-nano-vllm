@@ -1,8 +1,18 @@
 model: ~/huggingface/Qwen3-0.6B/
-workload_name: [req-16, req-32, req-64, req-128, req-169, req-196, req-211, req-212, req-213, req-256]
-num_requests: [16, 32, 64, 128, 169, 196, 211, 212, 213, 256]
+
+workload_name:
+  - kv-fit-45
+  - kv-decode-boundary-47
+  - kv-decode-pressure-49
+  - kv-allocation-boundary-51
+  - kv-admission-pressure-53
+  - kv-high-pressure-55
+  - kv-higher-pressure-57
+num_requests: [45, 47, 49, 51, 53, 55, 57]
 input_len: 256
-output_len: 256
+alternate_input_len: 4096
+input_order: alternate-first
+output_len: 128
 max_model_len: 8192
 seed: 0
 temperature: 0.0
