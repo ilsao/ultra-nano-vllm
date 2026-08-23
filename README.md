@@ -16,7 +16,6 @@
   <a href="#experiments">Experiments</a> ·
   <a href="#profiling">Profiling</a> ·
   <a href="#pluggable-design">Pluggable Design</a> ·
-  <a href="#relationship">nano-vLLM</a>
 </p>
 
 </div>
@@ -38,19 +37,6 @@ telemetry, and replaceable inference components.
 Experiment configurations are validated before GPU work. Each resolved run is
 executed sequentially in a fresh spawned process, and generated reports remain
 separate for every YAML file.
-
-<a id="relationship"></a>
-
-## Relationship to nano-vLLM
-
-[nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm) provides the compact
-offline inference engine, model execution path, and public `LLM` API used as
-this repository's baseline. Ultra-Nano-vLLM keeps that implementation readable
-while adding benchmark, experiment, reporting, plotting, process-isolation,
-telemetry, and component-selection infrastructure for controlled comparisons.
-Alternative schedulers and other optimized components are measured against the
-retained baseline rather than changing benchmark behavior for one specific
-implementation.
 
 <a id="installation"></a>
 
