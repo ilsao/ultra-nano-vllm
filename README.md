@@ -15,7 +15,8 @@
   <a href="#benchmark">Benchmark</a> ·
   <a href="#experiments">Experiments</a> ·
   <a href="#profiling">Profiling</a> ·
-  <a href="#pluggable-design">Pluggable Design</a>
+  <a href="#pluggable-design">Pluggable Design</a> ·
+  <a href="#relationship">nano-vLLM</a>
 </p>
 
 </div>
@@ -38,6 +39,19 @@ Experiment configurations are validated before GPU work. Each resolved run is
 executed sequentially in a fresh spawned process, and generated reports remain
 separate for every YAML file.
 
+<a id="relationship"></a>
+
+## Relationship to nano-vLLM
+
+[nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm) provides the compact
+offline inference engine, model execution path, and public `LLM` API used as
+this repository's baseline. Ultra-Nano-vLLM keeps that implementation readable
+while adding benchmark, experiment, reporting, plotting, process-isolation,
+telemetry, and component-selection infrastructure for controlled comparisons.
+Alternative schedulers and other optimized components are measured against the
+retained baseline rather than changing benchmark behavior for one specific
+implementation.
+
 <a id="installation"></a>
 
 ## Installation
@@ -48,11 +62,12 @@ matching PyTorch wheel for a different CUDA version.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install torch==2.8.0 \
+source ./.venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install torch==2.8.0 \
   --index-url https://download.pytorch.org/whl/cu128
-.venv/bin/python -m pip install ninja packaging
-MAX_JOBS=2 .venv/bin/python -m pip install -e . --no-build-isolation
+python -m pip install ninja packaging
+MAX_JOBS=2 python -m pip install -e . --no-build-isolation
 ```
 
 The separate PyTorch step makes CUDA PyTorch available while FlashAttention is
@@ -73,7 +88,7 @@ huggingface-cli download Qwen/Qwen3-0.6B \
 Run one scalar baseline workload with:
 
 ```bash
-.venv/bin/python -m benchmarks.benchmark \
+python -m benchmarks.benchmark \
   --model ~/huggingface/Qwen3-0.6B/ \
   --num-requests 33 \
   --input-len 256 \
@@ -134,7 +149,7 @@ component labels must be unique, and every generated report name follows
 Run one or both included experiment groups with:
 
 ```bash
-.venv/bin/python -m experiments.experiment \
+python -m experiments.experiment \
   --config experiments/configs/scheduler-comparison-minimal.yaml \
   --config experiments/configs/scheduler-comparison-hol-kv.yaml
 ```
@@ -163,7 +178,7 @@ utilization.
 Replot an existing compatible report group without running the model:
 
 ```bash
-.venv/bin/python -m experiments.experiment --plot-only \
+python -m experiments.experiment --plot-only \
   experiments/report/run-a.json \
   experiments/report/run-b.json
 ```
@@ -172,7 +187,7 @@ Analyze explicitly selected three-scheduler reports with paired seeds and
 bootstrap confidence intervals:
 
 ```bash
-.venv/bin/python -m experiments.analyze_scheduler \
+python -m experiments.analyze_scheduler \
   --reports path/to/baseline-report.json path/to/v1-report.json \
     path/to/v2-report.json \
   --reference-selector scheduler \
@@ -197,7 +212,7 @@ management, model input preparation, attention, KV-cache storage, sampling, and
 logits computation:
 
 ```bash
-ENABLE_NVTX=1 .venv/bin/python -m benchmarks.benchmark \
+ENABLE_NVTX=1 python -m benchmarks.benchmark \
   --model ~/huggingface/Qwen3-0.6B/ \
   --num-requests 33 \
   --input-len 256 \
@@ -238,14 +253,3 @@ llm = LLM(
     engine_component=EngineComponent(scheduler="scheduler-v2"),
 )
 ```
-
-## Development verification
-
-```bash
-.venv/bin/python -m unittest discover
-.venv/bin/python -m compileall -q benchmarks experiments nanovllm utils
-git diff --check
-```
-
-Generated output under `benchmarks/report/` and `experiments/report/` should
-remain untracked. See [LICENSE](LICENSE) for licensing information.
